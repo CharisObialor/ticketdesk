@@ -16,7 +16,9 @@ const sign = (url, exp) => crypto.createHmac('sha256', config.jwtSecret).update(
 
 function proxied(url) {
   const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
-  return `/api/mail/image?u=${encodeURIComponent(url)}&e=${exp}&s=${sign(url, exp)}`;
+  // Absolute when the API is on its own address, as the email is shown on the website's address.
+  const base = config.apiUrl !== config.appUrl ? config.apiUrl : '';
+  return `${base}/api/mail/image?u=${encodeURIComponent(url)}&e=${exp}&s=${sign(url, exp)}`;
 }
 
 function verify(url, exp, sig) {

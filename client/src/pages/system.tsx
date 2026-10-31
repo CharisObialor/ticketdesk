@@ -11,6 +11,7 @@ import { DefaultSlaCard } from '@/components/sla-editor';
 import { EscalationRulesCard } from '@/components/escalation-rules';
 import { api, errorMessage } from '@/lib/api';
 import { fileSize, timeAgo } from '@/lib/format';
+import { apiHref } from '@/lib/api';
 
 interface SystemInfo {
   backups: { name: string; size: number; created_at: string }[];
@@ -169,7 +170,7 @@ export default function SystemPage() {
                     <TableCell className="text-right tabular-nums">{fileSize(b.size)}</TableCell>
                     <TableCell className="pr-6">
                       <Button variant="ghost" size="icon-sm" asChild>
-                        <a href={`/api/system/backups/${b.name}`} aria-label={`Download ${b.name}`}>
+                        <a href={apiHref(`/api/system/backups/${b.name}`)} aria-label={`Download ${b.name}`}>
                           <Download />
                         </a>
                       </Button>

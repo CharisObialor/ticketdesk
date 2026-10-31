@@ -12,6 +12,7 @@ import { EmptyState, PageHeader } from '@/components/common';
 import { api, qs } from '@/lib/api';
 import { fileSize, formatDateTime } from '@/lib/format';
 import type { Transcript } from '@/lib/types';
+import { apiHref } from '@/lib/api';
 
 const REASONS: Record<string, string> = { resolved: 'Resolved', closed: 'Closed', manual: 'Saved manually' };
 
@@ -80,7 +81,7 @@ export default function TranscriptsPage() {
                   </TableCell>
                   <TableCell className="pr-4 text-right">
                     <Button variant="outline" size="sm" asChild>
-                      <a href={`/api/transcripts/${tr.id}/download`}>
+                      <a href={apiHref(`/api/transcripts/${tr.id}/download`)}>
                         <Download />
                         {fileSize(tr.size)}
                       </a>

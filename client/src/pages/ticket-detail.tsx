@@ -93,6 +93,7 @@ import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, f
 import { cn } from '@/lib/utils';
 import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, SignoffState, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
 import { fillPlaceholders } from '@/lib/placeholders';
+import { apiHref } from '@/lib/api';
 
 export interface TicketData {
   ticket: Ticket;
@@ -290,7 +291,7 @@ function TicketActions({
     onError: (err) => toast.error(errorMessage(err)),
   });
 
-  const exportUrl = (format: string) => `/api/tickets/${t.id}/export?format=${format}`;
+  const exportUrl = (format: string) => apiHref(`/api/tickets/${t.id}/export?format=${format}`);
 
   return (
     <div className="flex shrink-0 flex-wrap gap-2">
@@ -746,7 +747,7 @@ export function EditBox({ initial, busy, onSave, onCancel }: { initial: string; 
 }
 
 // Files on a message: photos as preview cards, other files as cards with their type and size. Each opens or downloads.
-export function Attachments({ items, base = '/api/files' }: { items: Attachment[]; base?: string }) {
+export function Attachments({ items, base = apiHref('/api/files') }: { items: Attachment[]; base?: string }) {
   const isImage = (a: Attachment) => /^image\/(png|jpe?g|gif|webp)$/.test(a.mime);
   const images = items.filter(isImage);
   const others = items.filter((a) => !isImage(a));
@@ -1393,7 +1394,7 @@ function TranscriptsCard({ transcripts }: { transcripts: Transcript[] }) {
           <ul className="space-y-2">
             {transcripts.map((tr) => (
               <li key={tr.id}>
-                <a href={`/api/transcripts/${tr.id}/download`} className="flex items-center gap-3 rounded-md p-2 text-sm hover:bg-muted/50">
+                <a href={apiHref(`/api/transcripts/${tr.id}/download`)} className="flex items-center gap-3 rounded-md p-2 text-sm hover:bg-muted/50">
                   <FileText className="size-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{formatDateTime(tr.created_at)}</div>

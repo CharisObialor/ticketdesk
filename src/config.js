@@ -30,6 +30,11 @@ module.exports = {
   appName: env.APP_NAME || 'DateHeight Support',
   companyName: env.COMPANY_NAME || 'DateHeight Integrated Nigeria Limited',
   appUrl: (env.APP_URL || `http://localhost:${int(env.PORT, 3000)}`).replace(/\/+$/, ''),
+  // Where the API runs, when the website and the API are on different addresses (dateheightsupport.com and
+  // api.dateheightsupport.com). Leave unset when one app serves both.
+  apiUrl: (env.API_URL || env.APP_URL || `http://localhost:${int(env.PORT, 3000)}`).replace(/\/+$/, ''),
+  // Share the sign-in cookies across subdomains (".dateheightsupport.com") so the website can send the CSRF token.
+  cookieDomain: env.COOKIE_DOMAIN || undefined,
   jwtSecret,
   sessionDays: 7,
   // Signed out after this many minutes without activity (0 = never).

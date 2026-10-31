@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { BRAND } from '@/lib/brand';
 import { initials } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { apiHref } from '@/lib/api';
 
 // The circular emblem from the DateHeight logo, for small spaces.
 export function Logo({ className }: { className?: string }) {
@@ -104,7 +105,7 @@ export function Footer() {
 
 export function CompanyLogo({ src, name, className }: { src: string | null | undefined; name: string; className?: string }) {
   return src ? (
-    <img src={src} alt={`${name} logo`} className={cn('size-9 shrink-0 rounded-md border bg-white object-contain p-0.5', className)} loading="lazy" />
+    <img src={apiHref(src)} alt={`${name} logo`} className={cn('size-9 shrink-0 rounded-md border bg-white object-contain p-0.5', className)} loading="lazy" />
   ) : (
     <span aria-hidden className={cn('flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground', className)}>
       <Building2 className="size-1/2" />

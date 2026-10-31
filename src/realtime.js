@@ -1,4 +1,5 @@
 const { Server } = require('socket.io');
+const config = require('./config');
 const db = require('./db');
 const auth = require('./auth');
 const privacy = require('./privacy');
@@ -18,12 +19,21 @@ function parseCookies(header = '') {
 }
 
 function init(server) {
+  // The website's own address may connect too, when it is on a different address from the API.
+  const appOrigin = new URL(config.appUrl).origin;
   io = new Server(server, {
     serveClient: true,
+    cors: { origin: appOrigin, credentials: true },
     // Reject cross-site connections; same-origin browsers always send a matching Origin.
     allowRequest: (req, cb) => {
       const origin = req.headers.origin;
-      cb(null, !origin || new URL(origin).host === req.headers.host);
+      let ok = !origin;
+      try {
+        ok = ok || new URL(origin).host === req.headers.host || new URL(origin).origin === appOrigin;
+      } catch {
+        ok = false;
+      }
+      cb(null, ok);
     },
   });
 

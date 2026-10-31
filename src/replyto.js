@@ -32,7 +32,7 @@ function parseReplyAddress(addresses) {
 
 // Signed link that turns off a person's notification emails without signing in (List-Unsubscribe).
 const unsubToken = (userId) => crypto.createHmac('sha256', config.jwtSecret).update(`unsub:${userId}`).digest('hex').slice(0, 24);
-const unsubscribeUrl = (userId) => `${config.appUrl}/api/auth/unsubscribe?u=${userId}&t=${unsubToken(userId)}`;
+const unsubscribeUrl = (userId) => `${config.apiUrl}/api/auth/unsubscribe?u=${userId}&t=${unsubToken(userId)}`;
 function checkUnsubscribe(u, t) {
   const expected = unsubToken(Number(u));
   return typeof t === 'string' && t.length === expected.length && crypto.timingSafeEqual(Buffer.from(t), Buffer.from(expected));

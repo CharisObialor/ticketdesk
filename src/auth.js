@@ -32,7 +32,7 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 const urlKeyFor = (payload) => crypto.createHmac('sha256', config.jwtSecret).update(`url:${payload.uid}.${payload.iat0}`).digest('hex').slice(0, 32);
 
 const csrfFor = (payload) => crypto.createHmac('sha256', config.jwtSecret).update(`csrf:${payload.uid}.${payload.iat0}.${payload.pv}`).digest('base64url');
-const cookieOptions = () => ({ sameSite: 'lax', secure: config.appUrl.startsWith('https://'), path: '/' });
+const cookieOptions = () => ({ sameSite: 'lax', secure: config.appUrl.startsWith('https://'), path: '/', domain: config.cookieDomain });
 function setCsrfCookie(res, payload) {
   res.cookie(CSRF_COOKIE, csrfFor(payload), { ...cookieOptions(), httpOnly: false, maxAge: config.sessionDays * 864e5 });
 }
@@ -53,12 +53,13 @@ function setSession(res, user, { createdAt } = {}) {
     secure: config.appUrl.startsWith('https://'),
     maxAge: config.sessionDays * 864e5,
     path: '/',
+    domain: config.cookieDomain,
   });
 }
 
 function clearSession(res) {
-  res.clearCookie(COOKIE, { path: '/' });
-  res.clearCookie(CSRF_COOKIE, { path: '/' });
+  res.clearCookie(COOKIE, { path: '/', domain: config.cookieDomain });
+  res.clearCookie(CSRF_COOKIE, { path: '/', domain: config.cookieDomain });
 }
 
 // Returns the token payload, { idle: true } when it ran out through inactivity, or null when invalid.

@@ -59,6 +59,7 @@ import { cn } from '@/lib/utils';
 import type { ChatItem, ChatMessage, Company, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
 import { basename } from '@/lib/url-key';
+import { apiHref } from '@/lib/api';
 
 type Filter = 'all' | 'group' | 'ticket';
 
@@ -504,7 +505,7 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
             edited
           </span>
         )}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base="/api/chats/files" />}
+        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/chats/files')} />}
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />

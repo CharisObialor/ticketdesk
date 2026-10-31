@@ -4,6 +4,7 @@ import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { useSession } from '@/hooks/use-session';
 import type { ChatGroup, ChatMember, ChatMessage, Message, Presence, ReadReceipt, Role, Ticket } from '@/lib/types';
+import { API_BASE } from '@/lib/api';
 
 interface TicketData {
   ticket: Ticket;
@@ -56,7 +57,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    const socket = io({ withCredentials: true });
+    const socket = API_BASE ? io(API_BASE, { withCredentials: true }) : io({ withCredentials: true });
     socketRef.current = socket;
 
     const refreshLists = () => {

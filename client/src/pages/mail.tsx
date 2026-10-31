@@ -54,6 +54,7 @@ import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage, uploadWithProgress } from '@/lib/api';
 import { fileSize } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { apiHref } from '@/lib/api';
 
 interface Address {
   emailAddress: { name?: string; address?: string };
@@ -540,7 +541,7 @@ function MessageRow({
     e.stopPropagation();
     fn();
   };
-  const msgUrl = (p: string) => boxUrl(`/api/mail/messages/${encodeURIComponent(m.id)}${p}`, box);
+  const msgUrl = (p: string) => boxUrl(apiHref(`/api/mail/messages/${encodeURIComponent(m.id)}${p}`), box);
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -756,7 +757,7 @@ function Reader({
         {list.map((a) => (addr(a) === box ? 'You' : showDetails ? `${who(a)} <${addr(a)}>` : who(a))).join('; ')}
       </div>
     ) : null;
-  const msgUrl = (p: string) => boxUrl(`/api/mail/messages/${encodeURIComponent(m.id)}${p}`, box);
+  const msgUrl = (p: string) => boxUrl(apiHref(`/api/mail/messages/${encodeURIComponent(m.id)}${p}`), box);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

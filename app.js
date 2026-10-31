@@ -55,16 +55,42 @@ async function main() {
   // or visitors could fake their address and dodge the sign-in limit.
   app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
+  // Website and API on different addresses (dateheightsupport.com and api.dateheightsupport.com).
+  const appOrigin = new URL(config.appUrl).origin;
+  const split = new URL(config.apiUrl).origin !== appOrigin;
+  if (split) {
+    // The website may call the API with its sign-in cookies; no other site may.
+    app.use('/api', (req, res, next) => {
+      if (req.get('origin') === appOrigin) {
+        res.set({
+          'Access-Control-Allow-Origin': appOrigin,
+          'Access-Control-Allow-Credentials': 'true',
+          'Access-Control-Allow-Headers': 'Content-Type, X-CSRF-Token',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE',
+          'Access-Control-Max-Age': '600',
+          Vary: 'Origin',
+        });
+      }
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
+      next();
+    });
+  }
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           'img-src': ["'self'", 'data:', 'blob:'],
           'connect-src': ["'self'", config.appUrl.replace(/^http/, 'ws')],
+          // Attachment previews (PDFs) are shown in a frame on the website's address.
+          'frame-ancestors': ["'self'", appOrigin],
           'upgrade-insecure-requests': config.appUrl.startsWith('https://') ? [] : null,
         },
       },
       strictTransportSecurity: config.appUrl.startsWith('https://'),
+      // Files and logos are loaded by the website from the API's address (same site, different subdomain).
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      // frame-ancestors above decides who may frame previews; the older header would block the website.
+      xFrameOptions: split ? false : { action: 'sameorigin' },
     })
   );
   app.use(compression());
@@ -81,7 +107,9 @@ async function main() {
   // Vite fingerprints everything under /assets, so those can be cached for good.
   app.use('/assets', express.static(path.join(publicDir, 'assets'), { maxAge: config.isProd ? '1y' : 0, immutable: config.isProd }));
   app.use(express.static(publicDir, { index: false, maxAge: config.isProd ? '1d' : 0 }));
-  app.get('*', sendApp);
+  // With a separate website, the API's address only serves the API; anything else goes to the website.
+  if (split) app.get('*', (req, res) => res.redirect(302, config.appUrl + req.originalUrl));
+  else app.get('*', sendApp);
   app.use(errorHandler);
 
   const server = http.createServer(app);

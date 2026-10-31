@@ -13,6 +13,7 @@ import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
 import { duration, fileSize } from '@/lib/format';
 import type { Attachment, Ticket } from '@/lib/types';
+import { apiHref } from '@/lib/api';
 
 type PhotoLabel = 'before' | 'after';
 const UNITS = { minutes: 1, hours: 60, days: 1440 } as const;
@@ -244,7 +245,7 @@ function Thumb({ file, onRemove }: { file: File; onRemove: () => void }) {
 }
 
 // Photos on a work update, shown side by side under Before and After headings.
-export function BeforeAfterPhotos({ items, base = '/api/files' }: { items: Attachment[]; base?: string }) {
+export function BeforeAfterPhotos({ items, base = apiHref('/api/files') }: { items: Attachment[]; base?: string }) {
   const groups = (['before', 'after'] as const).map((l) => ({ label: l, items: items.filter((a) => a.label === l) })).filter((g) => g.items.length);
   if (!groups.length) return null;
   return (
