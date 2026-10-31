@@ -45,6 +45,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, FileTypeIcon, useFileList } from '@/components/file-attachments';
+import { AttachmentPreviewDialog, type PreviewFile } from '@/components/attachment-preview';
 import { Attachment, AttachmentContent, AttachmentDescription, AttachmentMedia, AttachmentTitle, AttachmentTrigger } from '@/components/ui/attachment';
 import { RecipientInput } from '@/components/recipient-input';
 import { RichEditor } from '@/components/rich-editor';
@@ -726,6 +727,7 @@ function Reader({
     queryFn: () => api.get<{ message: MailMessage }>(boxUrl(`/mail/messages/${encodeURIComponent(id)}`, box)),
   });
   const [showDetails, setShowDetails] = useState(false);
+  const [preview, setPreview] = useState<PreviewFile | null>(null);
 
   // Opening marks the message read; refresh counts and the list.
   useEffect(() => {
@@ -873,6 +875,7 @@ function Reader({
             </button>
           </div>
         </div>
+        {preview && <AttachmentPreviewDialog file={preview} onClose={() => setPreview(null)} />}
         {m.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {m.attachments.map((a) => (
@@ -884,9 +887,13 @@ function Reader({
                   <AttachmentTitle title={a.name}>{a.name}</AttachmentTitle>
                   <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
                 </AttachmentContent>
-                <AttachmentTrigger asChild>
-                  <a href={msgUrl(`/attachments/${encodeURIComponent(a.id)}?name=${encodeURIComponent(a.name)}`)} aria-label={`Download ${a.name}`} />
-                </AttachmentTrigger>
+                <AttachmentTrigger
+                  aria-label={`Preview ${a.name}`}
+                  onClick={() => {
+                    const url = msgUrl(`/attachments/${encodeURIComponent(a.id)}?name=${encodeURIComponent(a.name)}`);
+                    setPreview({ name: a.name, contentType: a.contentType, size: a.size, viewUrl: `${url}&inline=1`, downloadUrl: url });
+                  }}
+                />
               </Attachment>
             ))}
           </div>

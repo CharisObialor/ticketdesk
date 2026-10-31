@@ -138,12 +138,25 @@ router.get(
     if (!/^[A-Za-z0-9=_\-+/]{10,600}$/.test(aid)) throw new HttpError(400, 'Invalid attachment');
     const name = path.basename(String(req.query.name || 'attachment')).replace(/[^\w.\- ()]/g, '_').slice(0, 150) || 'attachment';
     const data = await graph.getAttachment(req.mailbox, id(req), aid);
-    res.attachment(name);
-    res.type('application/octet-stream');
+    // ?inline=1 shows images and PDFs in the preview. The type comes from the file's first bytes, not its name or the
+    // sender's label, so nothing else (such as a web page renamed to .png) can ever render inside the portal.
+    const shown = req.query.inline === '1' ? previewType(Buffer.from(data)) : null;
+    res.set('Content-Disposition', `${shown ? 'inline' : 'attachment'}; filename="${name}"`);
+    res.type(shown || 'application/octet-stream');
     res.set('Cache-Control', 'private, no-store');
     res.send(data);
   })
 );
+
+// File types the attachment preview can show, recognised by their first bytes.
+const PREVIEWABLE = [
+  ['image/png', (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))],
+  ['image/jpeg', (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+  ['image/gif', (b) => ['GIF87a', 'GIF89a'].includes(b.toString('ascii', 0, 6))],
+  ['image/webp', (b) => b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP'],
+  ['application/pdf', (b) => b.toString('ascii', 0, 5) === '%PDF-'],
+];
+const previewType = (buf) => (PREVIEWABLE.find(([, test]) => buf.length > 12 && test(buf)) || [null])[0];
 
 router.post(
   '/messages/:id/read',
