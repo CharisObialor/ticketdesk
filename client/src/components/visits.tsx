@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { ROLE_LABELS, parseTs } from '@/lib/format';
+import { ROLE_LABELS, parseTs, VISIT_DURATIONS, visitDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { StaffMember, Ticket, Visit, VisitStatus } from '@/lib/types';
 
@@ -100,11 +100,14 @@ export function ScheduleVisitDialog({ ticket, visit, onClose }: { ticket: Pick<T
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {[30, 60, 90, 120, 180, 240, 480].map((m) => (
-                    <SelectItem key={m} value={String(m)}>
-                      {m < 60 ? `${m} minutes` : `${m / 60} hour${m === 60 ? '' : 's'}`}
-                    </SelectItem>
-                  ))}
+                  {[...new Set([...VISIT_DURATIONS, Number(duration)])]
+                    .sort((a, b) => a - b)
+                    .map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {visitDuration(m)}
+                        {m === 480 ? ' (full working day)' : ''}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -157,7 +160,7 @@ export function VisitsCard({ ticket, visits }: { ticket: Ticket; visits: Visit[]
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-sm">Site visits</CardTitle>
+        <CardTitle className="type-h5">Site visits</CardTitle>
         {isStaff && ticket.status !== 'closed' && (
           <CardAction>
             <Button variant="ghost" size="xs" onClick={() => setScheduling(true)}>

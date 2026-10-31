@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
-import type { LucideIcon } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Building2, type LucideIcon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { useSession } from '@/hooks/use-session';
+import { greeting, useNow } from '@/hooks/use-now';
+import { api } from '@/lib/api';
 import { BRAND } from '@/lib/brand';
 import { initials } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -32,11 +36,11 @@ export function BrandLockup({ className }: { className?: string }) {
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="type-h1">{title}</h1>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -59,9 +63,24 @@ export function EmptyState({ icon: Icon, title, description, action }: { icon: L
   );
 }
 
-export function UserAvatar({ name, className }: { name: string | null | undefined; className?: string }) {
+// Who has a profile photo (fetched once, shared by every avatar on the page).
+export function useAvatars() {
+  const { user } = useSession();
+  return useQuery({
+    queryKey: ['avatars'],
+    queryFn: () => api.get<{ avatars: Record<number, string> }>('/auth/avatars'),
+    staleTime: 5 * 60_000,
+    enabled: !!user,
+  });
+}
+
+// Initials, or the person's photo when they have one (pass userId, or src directly).
+export function UserAvatar({ name, userId, src, className }: { name: string | null | undefined; userId?: number | null; src?: string | null; className?: string }) {
+  const avatars = useAvatars();
+  const url = src ?? (userId ? avatars.data?.avatars[userId] : undefined);
   return (
     <Avatar className={cn('size-8', className)}>
+      {url && <AvatarImage src={url} alt={name ?? ''} className="object-cover" />}
       <AvatarFallback className="text-xs font-medium">{initials(name)}</AvatarFallback>
     </Avatar>
   );
@@ -81,4 +100,20 @@ export function Footer() {
       </p>
     </div>
   );
+}
+
+export function CompanyLogo({ src, name, className }: { src: string | null | undefined; name: string; className?: string }) {
+  return src ? (
+    <img src={src} alt={`${name} logo`} className={cn('size-9 shrink-0 rounded-md border bg-white object-contain p-0.5', className)} loading="lazy" />
+  ) : (
+    <span aria-hidden className={cn('flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground', className)}>
+      <Building2 className="size-1/2" />
+    </span>
+  );
+}
+
+// "Good morning, Ada" - its own component so only this text re-renders as the clock ticks.
+export function Greeting({ name }: { name: string }) {
+  const now = useNow();
+  return <>{`${greeting(now)}, ${name.split(' ')[0]}`}</>;
 }

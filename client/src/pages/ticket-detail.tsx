@@ -11,15 +11,30 @@ import {
   Info,
   Loader2,
   Lock,
+  Mail,
   MessageSquareText,
   Pencil,
   RotateCcw,
+  Save,
+  ShieldCheck,
+  Undo2,
   Send,
   ShieldOff,
   TriangleAlert,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,6 +64,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { RecipientInput } from '@/components/recipient-input';
+import { AiAssistantCard } from '@/components/ai-assistant';
 import { EscalatedBadge, PriorityBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
 import { RatingCard, StaffRatingCard } from '@/components/rating';
 import { VisitsCard } from '@/components/visits';
@@ -57,7 +74,7 @@ import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, fileSize, formatDateTime, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
+import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, SignoffState, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
 import { fillPlaceholders } from '@/lib/placeholders';
 
 export interface TicketData {
@@ -67,13 +84,14 @@ export interface TicketData {
   reads: ReadReceipt[];
   rating: Rating | null;
   visits: Visit[];
+  signoff: SignoffState;
 }
 
 const UNASSIGNED = 'none';
 
 export default function TicketDetailPage() {
   const id = Number(useParams().id);
-  const { isStaff } = useSession();
+  const { isStaff, isAdmin, app } = useSession();
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ['ticket', id],
@@ -124,7 +142,7 @@ export default function TicketDetailPage() {
     );
   }
 
-  const { ticket: t, messages, transcripts, reads, rating, visits } = query.data;
+  const { ticket: t, messages, transcripts, reads, rating, visits, signoff } = query.data;
   const isOpen = OPEN_STATUSES.includes(t.status);
   const canRate = !isStaff && (t.status === 'resolved' || t.status === 'closed');
 
@@ -146,7 +164,7 @@ export default function TicketDetailPage() {
               <span>·</span>
               <span>Opened {timeAgo(t.created_at)}</span>
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight break-words">{t.subject}</h1>
+            <h1 className="type-h1 break-words">{t.subject}</h1>
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={t.status} />
               <Badge variant="secondary" className="font-normal">
@@ -188,14 +206,16 @@ export default function TicketDetailPage() {
         </Card>
 
         <div className="space-y-6">
-          <DetailsCard ticket={t} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} />
+          {isAdmin && app?.ai && <AiAssistantCard ticketId={t.id} />}
+          {signoff?.active && <SignoffCard ticket={t} signoff={signoff} isStaff={isStaff} />}
+          <DetailsCard ticket={t} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} busy={update.isPending} />
           <VisitsCard ticket={t} visits={visits} />
           {isStaff && rating && <StaffRatingCard rating={rating} />}
           {isStaff && <TranscriptsCard transcripts={transcripts} />}
           {!isStaff && isOpen && (
             <Card className="gap-3">
               <CardHeader>
-                <CardTitle className="text-sm">Need help faster?</CardTitle>
+                <CardTitle className="type-h5">Need help faster?</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
                 If this issue is urgent or not progressing, you can request an escalation from the actions menu. A support manager will review it.
@@ -210,7 +230,9 @@ export default function TicketDetailPage() {
 
 function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; isStaff: boolean; onUpdate: (b: Record<string, unknown>) => void; busy: boolean }) {
   const qc = useQueryClient();
+  const { isAdmin } = useSession();
   const [escalateOpen, setEscalateOpen] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
   const isOpen = OPEN_STATUSES.includes(t.status);
 
   const archive = useMutation({
@@ -242,6 +264,12 @@ function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket;
         <Button variant="outline" onClick={() => (t.escalated && isStaff ? onUpdate({ escalate: false }) : setEscalateOpen(true))} disabled={busy}>
           {t.escalated && isStaff ? <ShieldOff /> : <TriangleAlert />}
           {t.escalated && isStaff ? 'Clear escalation' : isStaff ? 'Escalate' : 'Request escalation'}
+        </Button>
+      )}
+      {isAdmin && (
+        <Button variant="outline" onClick={() => setEmailOpen(true)}>
+          <Mail />
+          Email ticket
         </Button>
       )}
       <DropdownMenu>
@@ -277,7 +305,79 @@ function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket;
         </DropdownMenuContent>
       </DropdownMenu>
       <EscalateDialog open={escalateOpen} onOpenChange={setEscalateOpen} isStaff={isStaff} onConfirm={(reason) => onUpdate({ escalate: true, reason })} />
+      {emailOpen && <EmailTicketDialog ticket={t} onClose={() => setEmailOpen(false)} />}
     </div>
+  );
+}
+
+// Sends the ticket (details, recent conversation, full transcript attached) to anyone, from the admin's mailbox.
+function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [to, setTo] = useState<string[]>([]);
+  const [cc, setCc] = useState<string[]>([]);
+  const [showCc, setShowCc] = useState(false);
+  const [note, setNote] = useState('');
+  const send = useMutation({
+    mutationFn: () => api.post<{ sentTo: string[] }>(`/tickets/${t.id}/email`, { to, cc, note }),
+    onSuccess: (r) => {
+      toast.success(`Ticket #${t.id} sent to ${r.sentTo.length} ${r.sentTo.length === 1 ? 'person' : 'people'}`);
+      qc.invalidateQueries({ queryKey: ['ticket', t.id] });
+      onClose();
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!to.length) return toast.error('Add at least one recipient');
+            send.mutate();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Email ticket #{t.id}</DialogTitle>
+            <DialogDescription>
+              Sends the ticket details and the conversation, with the full transcript attached, from your mailbox. Internal notes are never included.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="share-to">To</Label>
+              {!showCc && (
+                <Button type="button" variant="ghost" size="xs" onClick={() => setShowCc(true)}>
+                  Add Cc
+                </Button>
+              )}
+            </div>
+            <RecipientInput id="share-to" value={to} onChange={setTo} placeholder="name@company.com" />
+          </div>
+          {showCc && (
+            <div className="grid gap-2">
+              <Label htmlFor="share-cc">Cc</Label>
+              <RecipientInput id="share-cc" value={cc} onChange={setCc} />
+            </div>
+          )}
+          <div className="grid gap-2">
+            <Label htmlFor="share-note">Message (optional)</Label>
+            <Textarea id="share-note" rows={4} maxLength={5000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: Can you check the router logs for this site?" />
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={send.isPending}>
+              {send.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+              Send
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -409,11 +509,17 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
 
   return (
     <div className="group flex gap-3">
-      <UserAvatar name={m.user_name} className="mt-0.5" />
+      <UserAvatar name={m.user_name ?? m.sender_name} userId={m.user_id} className="mt-0.5" />
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <span className="font-medium">{m.user_name ?? 'Deleted user'}</span>
+          <span className="font-medium">{m.user_name ?? m.sender_name ?? 'Deleted user'}</span>
           {own && <span className="text-xs text-muted-foreground">(you)</span>}
+          {m.sender_email && (
+            <Badge variant="outline" className="font-normal" title={m.sender_email}>
+              <Mail />
+              External, by email
+            </Badge>
+          )}
           {fromStaff && !viewerIsStaff && (
             <Badge variant="secondary" className="font-normal">
               Support team
@@ -455,6 +561,12 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
             )}
           >
             {m.body}
+          </div>
+        )}
+        {(m.cc || m.bcc) && (
+          <div className="space-y-0.5 text-xs text-muted-foreground">
+            {m.cc && <div className="break-all">Cc: {m.cc.join(', ')}</div>}
+            {m.bcc && <div className="break-all">Bcc: {m.bcc.join(', ')}</div>}
           </div>
         )}
         {m.attachments.length > 0 && <Attachments items={m.attachments} />}
@@ -598,6 +710,10 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
   const files = useFileList();
   const [body, setBody] = useState('');
   const [mode, setMode] = useState<'reply' | 'note'>('reply');
+  const { isAdmin, app } = useSession();
+  const [showCopies, setShowCopies] = useState(false);
+  const [cc, setCc] = useState<string[]>([]);
+  const [bcc, setBcc] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const typingOn = useRef(false);
@@ -609,6 +725,20 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
     typingOn.current = false;
   };
   useEffect(() => stopTyping, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Use this draft" from the AI assistant drops the text into this reply box.
+  useEffect(() => {
+    const onDraft = (e: Event) => {
+      const { ticketId, text } = (e as CustomEvent<{ ticketId: number; text: string }>).detail;
+      if (ticketId !== ticket.id) return;
+      setMode('reply');
+      setBody(text);
+      document.getElementById(`composer-${ticket.id}`)?.focus();
+      toast.success('Draft added to the reply box. Review it before sending.');
+    };
+    window.addEventListener('ticket-draft', onDraft);
+    return () => window.removeEventListener('ticket-draft', onDraft);
+  }, [ticket.id]);
 
   const onChange = (v: string) => {
     setBody(v);
@@ -627,6 +757,8 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
     const fd = new FormData();
     fd.set('body', body.trim());
     if (internal) fd.set('internal', '1');
+    if (!internal && cc.length) fd.set('cc', cc.join(','));
+    if (!internal && bcc.length) fd.set('bcc', bcc.join(','));
     for (const f of files.files) fd.append('files', f);
     try {
       const { message, ticket: updated } = await api.post<{ message: Message; ticket: Ticket }>(`/tickets/${ticket.id}/messages`, fd);
@@ -637,6 +769,9 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
       );
       qc.invalidateQueries({ queryKey: ['ticket', ticket.id] });
       setBody('');
+      setCc([]);
+      setBcc([]);
+      setShowCopies(false);
       files.clear();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -666,6 +801,7 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
         </Tabs>
       )}
       <Textarea
+        id={`composer-${ticket.id}`}
         rows={4}
         value={body}
         placeholder={internal ? 'Add a note for the support team. The client will not see this.' : 'Write your reply'}
@@ -680,10 +816,36 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
         }}
         className="resize-y bg-background"
       />
+      {isAdmin && !internal && showCopies && (
+        <div className="grid gap-2 rounded-md border bg-background p-3">
+          <div className="grid grid-cols-[2.5rem_1fr] items-center gap-2">
+            <label htmlFor="reply-cc" className="text-sm text-muted-foreground">
+              Cc
+            </label>
+            <RecipientInput id="reply-cc" value={cc} onChange={setCc} placeholder="name@company.com" />
+          </div>
+          <div className="grid grid-cols-[2.5rem_1fr] items-center gap-2">
+            <label htmlFor="reply-bcc" className="text-sm text-muted-foreground">
+              Bcc
+            </label>
+            <RecipientInput id="reply-bcc" value={bcc} onChange={setBcc} placeholder="name@company.com" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This reply will be emailed from {app?.mailbox ?? 'your mailbox'} to the client and these people, with any attachments. Their replies come back to this ticket.
+            Bcc addresses are only visible to staff.
+          </p>
+        </div>
+      )}
       <FileChips list={files} />
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <AttachButton list={files}>Attach</AttachButton>
+          {isAdmin && !internal && (
+            <Button type="button" variant={showCopies ? 'secondary' : 'ghost'} size="sm" onClick={() => setShowCopies((v) => !v)}>
+              <Users />
+              Cc / Bcc
+            </Button>
+          )}
           {isStaff && <SavedReplyPicker ticket={ticket} onPick={(text) => onChange(body.trim() ? `${body.trimEnd()}\n\n${text}` : text)} />}
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl + Enter to send</span>
         </div>
@@ -696,6 +858,122 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
   );
 }
 
+// Resolved tickets close only after other admins sign off. Shows progress, and lets admins approve or send back.
+function SignoffCard({ ticket: t, signoff, isStaff }: { ticket: Ticket; signoff: SignoffState; isStaff: boolean }) {
+  const { user, isAdmin } = useSession();
+  const qc = useQueryClient();
+  const [comment, setComment] = useState('');
+  const [sendingBack, setSendingBack] = useState(false);
+  const decide = useMutation({
+    mutationFn: (decision: 'approve' | 'reject') => api.post<{ closed: boolean }>(`/tickets/${t.id}/signoff`, { decision, comment }),
+    onSuccess: (r, decision) => {
+      toast.success(decision === 'reject' ? 'Sent back. The ticket is in progress again.' : r.closed ? 'Signed off. The ticket is now closed.' : 'Signed off. Waiting for another admin.');
+      setComment('');
+      setSendingBack(false);
+      qc.invalidateQueries({ queryKey: ['ticket', t.id] });
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      qc.invalidateQueries({ queryKey: ['actions'] });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  // Clients only learn that the resolution is being reviewed.
+  if (!isStaff) {
+    return (
+      <Alert>
+        <ShieldCheck />
+        <AlertTitle>Being reviewed</AlertTitle>
+        <AlertDescription>Our team is checking the resolution before closing this ticket. If the problem comes back, just reply.</AlertDescription>
+      </Alert>
+    );
+  }
+
+  const approvals = signoff.approvals ?? [];
+  const required = signoff.required ?? 2;
+  const mine = signoff.requestedBy?.id === user?.id;
+  const done = approvals.some((a) => a.user_id === user?.id);
+  const canDecide = isAdmin && !mine && !done;
+
+  return (
+    <Card className="gap-3 border-amber-500/40 bg-amber-50/60 dark:bg-amber-950/20">
+      <CardHeader>
+        <CardTitle className="type-h5 flex items-center gap-2">
+          <ShieldCheck className="size-4 text-amber-700 dark:text-amber-400" />
+          Waiting for sign-off
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="text-muted-foreground">
+          {signoff.requestedBy ? `${signoff.requestedBy.name} marked this resolved` : 'Marked resolved'}
+          {signoff.requestedAt ? ` ${timeAgo(signoff.requestedAt)}` : ''}. It closes once {required === 1 ? 'another admin approves' : `${required} other admins approve`}.
+        </p>
+        <div className="flex items-center gap-2">
+          {Array.from({ length: required }).map((_, i) => (
+            <span key={i} className={cn('h-1.5 flex-1 rounded-full', i < approvals.length ? 'bg-emerald-500' : 'bg-muted-foreground/20')} />
+          ))}
+          <span className="shrink-0 text-xs font-medium tabular-nums">
+            {approvals.length} of {required}
+          </span>
+        </div>
+        {approvals.length > 0 && (
+          <ul className="space-y-1.5">
+            {approvals.map((a) => (
+              <li key={a.user_id} className="flex gap-2">
+                <CircleCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                <span>
+                  <span className="font-medium">{a.name}</span> <span className="text-muted-foreground">approved {timeAgo(a.created_at)}</span>
+                  {a.comment && <span className="block text-muted-foreground">&ldquo;{a.comment}&rdquo;</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {canDecide ? (
+          <div className="space-y-2">
+            <Textarea
+              rows={2}
+              maxLength={2000}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder={sendingBack ? 'Why is it being sent back? (required)' : 'Comment (optional)'}
+            />
+            {sendingBack ? (
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setSendingBack(false)} disabled={decide.isPending}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => decide.mutate('reject')} disabled={decide.isPending || !comment.trim()}>
+                  {decide.isPending ? <Loader2 className="animate-spin" /> : <Undo2 />}
+                  Send back to In progress
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" variant="outline" onClick={() => setSendingBack(true)} disabled={decide.isPending}>
+                  <Undo2 />
+                  Send back
+                </Button>
+                <Button size="sm" onClick={() => decide.mutate('approve')} disabled={decide.isPending}>
+                  {decide.isPending ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                  {approvals.length + 1 >= required ? 'Approve and close' : 'Approve'}
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {!isAdmin
+              ? 'Admins sign off resolved tickets.'
+              : mine
+                ? 'You resolved this ticket, so other admins sign it off. They have been emailed.'
+                : 'You have approved this ticket. Waiting for another admin.'}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[110px_1fr] items-center gap-2 text-sm">
@@ -705,7 +983,14 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function DetailsCard({ ticket: t, isStaff, onUpdate }: { ticket: Ticket; isStaff: boolean; onUpdate: (b: Record<string, unknown>) => void }) {
+interface DetailDraft {
+  status: Status;
+  priority: Priority;
+  category: string;
+  assigned_to: number | null;
+}
+
+function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; isStaff: boolean; onUpdate: (b: Record<string, unknown>) => void; busy: boolean }) {
   const { app } = useSession();
   const staff = useQuery({
     queryKey: ['staff'],
@@ -714,16 +999,41 @@ function DetailsCard({ ticket: t, isStaff, onUpdate }: { ticket: Ticket; isStaff
     staleTime: 5 * 60_000,
   });
 
+  // Changes are a draft until Save (and a confirmation), so nothing changes on the ticket by accident.
+  const saved: DetailDraft = { status: t.status, priority: t.priority, category: t.category, assigned_to: t.assigned_to ?? null };
+  const [draft, setDraft] = useState<DetailDraft>(saved);
+  const [confirming, setConfirming] = useState(false);
+  const savedKey = JSON.stringify(saved);
+  // When someone else updates the ticket (or after saving), start again from what is stored.
+  useEffect(() => setDraft(JSON.parse(savedKey)), [savedKey]);
+  const set = <K extends keyof DetailDraft>(k: K, v: DetailDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
+
+  const staffName = (id: number | null) => (id ? (staff.data?.staff.find((s) => s.id === id)?.name ?? t.assignee_name ?? `#${id}`) : 'Unassigned');
+  const changes = [
+    draft.status !== saved.status && { label: 'Status', from: STATUS_LABELS[saved.status], to: STATUS_LABELS[draft.status] },
+    draft.priority !== saved.priority && { label: 'Priority', from: PRIORITY_LABELS[saved.priority], to: PRIORITY_LABELS[draft.priority] },
+    draft.category !== saved.category && { label: 'Category', from: saved.category, to: draft.category },
+    draft.assigned_to !== saved.assigned_to && { label: 'Assignee', from: staffName(saved.assigned_to), to: staffName(draft.assigned_to) },
+  ].filter(Boolean) as { label: string; from: string; to: string }[];
+  const dirty = changes.length > 0;
+
+  function save() {
+    const body: Record<string, unknown> = {};
+    for (const k of Object.keys(draft) as (keyof DetailDraft)[]) if (draft[k] !== saved[k]) body[k] = draft[k];
+    onUpdate(body);
+    setConfirming(false);
+  }
+
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-sm">Details</CardTitle>
+        <CardTitle className="type-h5">Details</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {isStaff ? (
           <>
             <DetailRow label="Status">
-              <Select value={t.status} onValueChange={(v) => onUpdate({ status: v })}>
+              <Select value={draft.status} onValueChange={(v) => set('status', v as Status)}>
                 <SelectTrigger size="sm" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -737,7 +1047,7 @@ function DetailsCard({ ticket: t, isStaff, onUpdate }: { ticket: Ticket; isStaff
               </Select>
             </DetailRow>
             <DetailRow label="Priority">
-              <Select value={t.priority} onValueChange={(v) => onUpdate({ priority: v })}>
+              <Select value={draft.priority} onValueChange={(v) => set('priority', v as Priority)}>
                 <SelectTrigger size="sm" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -751,7 +1061,7 @@ function DetailsCard({ ticket: t, isStaff, onUpdate }: { ticket: Ticket; isStaff
               </Select>
             </DetailRow>
             <DetailRow label="Category">
-              <Select value={t.category} onValueChange={(v) => onUpdate({ category: v })}>
+              <Select value={draft.category} onValueChange={(v) => set('category', v)}>
                 <SelectTrigger size="sm" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -765,20 +1075,61 @@ function DetailsCard({ ticket: t, isStaff, onUpdate }: { ticket: Ticket; isStaff
               </Select>
             </DetailRow>
             <DetailRow label="Assignee">
-              <Select value={t.assigned_to ? String(t.assigned_to) : UNASSIGNED} onValueChange={(v) => onUpdate({ assigned_to: v === UNASSIGNED ? null : Number(v) })}>
-                <SelectTrigger size="sm" className="w-full">
+              <Select value={draft.assigned_to ? String(draft.assigned_to) : UNASSIGNED} onValueChange={(v) => set('assigned_to', v === UNASSIGNED ? null : Number(v))}>
+                <SelectTrigger size="sm" className="h-auto min-h-8 w-full py-1 [&_[data-slot=select-value]]:flex-col [&_[data-slot=select-value]]:items-start [&_[data-slot=select-value]]:gap-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
                   {staff.data?.staff.map((s) => (
                     <SelectItem key={s.id} value={String(s.id)}>
-                      {s.name}
+                      <span className="flex min-w-0 flex-col text-left leading-tight">
+                        <span className="truncate">{s.name}</span>
+                        <span className="truncate text-xs text-muted-foreground">{s.email}</span>
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </DetailRow>
+            {dirty && (
+              <div className="flex items-center justify-end gap-2 rounded-md bg-muted/50 p-2">
+                <span className="mr-auto text-xs text-muted-foreground">
+                  {changes.length} unsaved change{changes.length === 1 ? '' : 's'}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setDraft(saved)} disabled={busy}>
+                  Reset
+                </Button>
+                <Button size="sm" onClick={() => setConfirming(true)} disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" /> : <Save />}
+                  Save
+                </Button>
+              </div>
+            )}
+            <AlertDialog open={confirming} onOpenChange={setConfirming}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Save changes to ticket #{t.id}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The client is told about status changes, and a new assignee is notified. Are you sure you want to make these changes?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <ul className="space-y-1.5 rounded-md border p-3 text-sm">
+                  {changes.map((c) => (
+                    <li key={c.label} className="grid grid-cols-[5.5rem_1fr] gap-2">
+                      <span className="text-muted-foreground">{c.label}</span>
+                      <span>
+                        <span className="text-muted-foreground line-through">{c.from}</span> <span className="font-medium">{c.to}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={save}>Yes, save changes</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </>
         ) : (
           <>
@@ -817,7 +1168,7 @@ function TranscriptsCard({ transcripts }: { transcripts: Transcript[] }) {
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-sm">Archived transcripts</CardTitle>
+        <CardTitle className="type-h5">Archived transcripts</CardTitle>
       </CardHeader>
       <CardContent>
         {transcripts.length === 0 ? (

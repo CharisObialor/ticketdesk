@@ -70,7 +70,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
 
     socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('disconnect', (reason) => {
+      setConnected(false);
+      // The server closed the connection because the account changed: re-check the session, then reconnect.
+      if (reason === 'io server disconnect') {
+        qc.invalidateQueries({ queryKey: ['me'] }).then(() => {
+          if (qc.getQueryData(['me'])) socket.connect();
+        });
+      }
+    });
     socket.on('presence', (p: Presence) => setPresence(p));
     socket.on('message:new', ({ ticketId, message }: { ticketId: number; message: Message }) => {
       qc.setQueryData<TicketData>(['ticket', ticketId], (prev) =>

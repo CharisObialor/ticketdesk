@@ -31,6 +31,7 @@ function init(server) {
       const user = await auth.userFromToken(parseCookies(socket.request.headers.cookie)[auth.COOKIE]);
       if (!user) return next(new Error('unauthorized'));
       socket.user = user;
+      socket.pv = auth.passwordVersion(user);
       next();
     } catch (err) {
       next(err);
@@ -64,7 +65,33 @@ function init(server) {
     socket.on('disconnect', () => track(u, -1));
   });
 
+  setInterval(() => revalidate().catch((err) => console.error('[realtime] revalidate failed', err)), 60000).unref();
   return io;
+}
+
+// Open connections were authorised when they connected. Every minute, close any whose account has since been
+// disabled, had its password changed, changed role or company, or whose company was disabled; the browser
+// then reconnects (or is sent to sign in) with its current session.
+async function revalidate() {
+  const sockets = [...io.sockets.sockets.values()];
+  const ids = [...new Set(sockets.map((s) => s.user.id))];
+  if (!ids.length) return;
+  const rows = await db.query(
+    `SELECT u.*, c.is_active AS company_active FROM users u LEFT JOIN companies c ON c.id = u.company_id WHERE u.id IN (${db.inList(ids)})`,
+    ids
+  );
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+  for (const s of sockets) {
+    const cur = byId.get(s.user.id);
+    const stale =
+      !cur ||
+      !cur.is_active ||
+      auth.passwordVersion(cur) !== s.pv ||
+      cur.role !== s.user.role ||
+      Number(cur.company_id || 0) !== Number(s.user.company_id || 0) ||
+      (cur.role === 'client' && Number(cur.company_active) === 0);
+    if (stale) s.disconnect(true);
+  }
 }
 
 function track(user, delta) {

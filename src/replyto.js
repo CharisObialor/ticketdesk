@@ -13,6 +13,9 @@ function replyAddress(ticketId, userId) {
   return `${local}+t${ticketId}u${userId}-${sign(ticketId, userId)}@${domain}`;
 }
 
+// Shared reply address for a ticket (user 0), used on emails with CC/BCC so anyone on the thread can reply.
+const ticketReplyAddress = (ticketId) => replyAddress(ticketId, 0);
+
 // Finds a valid reply token in any of the given addresses. Returns { ticketId, userId } or null.
 function parseReplyAddress(addresses) {
   for (const addr of addresses) {
@@ -27,4 +30,12 @@ function parseReplyAddress(addresses) {
   return null;
 }
 
-module.exports = { replyAddress, parseReplyAddress };
+// Signed link that turns off a person's notification emails without signing in (List-Unsubscribe).
+const unsubToken = (userId) => crypto.createHmac('sha256', config.jwtSecret).update(`unsub:${userId}`).digest('hex').slice(0, 24);
+const unsubscribeUrl = (userId) => `${config.appUrl}/api/auth/unsubscribe?u=${userId}&t=${unsubToken(userId)}`;
+function checkUnsubscribe(u, t) {
+  const expected = unsubToken(Number(u));
+  return typeof t === 'string' && t.length === expected.length && crypto.timingSafeEqual(Buffer.from(t), Buffer.from(expected));
+}
+
+module.exports = { replyAddress, ticketReplyAddress, parseReplyAddress, unsubscribeUrl, checkUnsubscribe };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -6,6 +6,8 @@ import {
   CheckCheck,
   Eye,
   ExternalLink,
+  Link2,
+  MessageSquare,
   Loader2,
   Lock,
   LogOut,
@@ -38,6 +40,7 @@ import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
 import { StatusBadge } from '@/components/ticket-badges';
 import { useRealtime, type GroupData } from '@/hooks/use-realtime';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo } from '@/lib/format';
@@ -143,7 +146,7 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
     <>
       <div className="space-y-3 border-b p-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold">Messages</h1>
+          <h1 className="type-h3">Messages</h1>
           <Button size="sm" onClick={onNewGroup}>
             <Plus />
             New group
@@ -175,7 +178,9 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
           <EmptyState
             icon={term ? Search : filter === 'ticket' ? TicketIcon : Users}
             title={term ? (searching ? 'Searching...' : 'No matches') : filter === 'group' ? 'No group conversations yet' : 'No conversations yet'}
-            description={term ? undefined : filter === 'ticket' ? 'Ticket conversations appear here.' : 'Start a group to chat with your colleagues and our support team.'}
+            description={
+              term ? undefined : filter === 'ticket' ? 'Ticket conversations appear here.' : 'Start a group to chat with your colleagues and our support team.'
+            }
           />
         ) : (
           <>
@@ -216,14 +221,59 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
 }
 
 function ConversationRow({ item: i, active }: { item: ChatItem; active: boolean }) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <ConversationLink item={i} active={active} />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem asChild>
+          <Link to={`/messages/${i.type}/${i.id}`}>
+            <MessageSquare />
+            Open conversation
+          </Link>
+        </ContextMenuItem>
+        {i.type === 'ticket' && (
+          <ContextMenuItem asChild>
+            <Link to={`/tickets/${i.id}`}>
+              <TicketIcon />
+              Open ticket page
+            </Link>
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onClick={() => window.open(`/messages/${i.type}/${i.id}`, '_blank', 'noopener')}>
+          <ExternalLink />
+          Open in new tab
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() =>
+            navigator.clipboard.writeText(`${window.location.origin}/messages/${i.type}/${i.id}`).then(
+              () => toast.success('Link copied'),
+              () => toast.error('Could not copy')
+            )
+          }
+        >
+          <Link2 />
+          Copy link
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+// The right-click menu passes its event handlers through these props onto the link.
+function ConversationLink({ item: i, active, ...rest }: { item: ChatItem; active: boolean } & HTMLAttributes<HTMLAnchorElement>) {
   const Icon = i.type === 'group' ? Users : TicketIcon;
   const preview = i.last_body ? (i.last_kind === 'system' || !i.last_user ? i.last_body : `${i.last_user}: ${i.last_body}`) : 'No messages yet';
   return (
-    <Link
-      to={`/messages/${i.type}/${i.id}`}
-      className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}
-    >
-      <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-full', i.type === 'group' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>
+    <Link {...rest} to={`/messages/${i.type}/${i.id}`} className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}>
+      <div
+        className={cn(
+          'flex size-10 shrink-0 items-center justify-center rounded-full',
+          i.type === 'group' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+        )}
+      >
         <Icon className="size-4" />
       </div>
       <div className="min-w-0 flex-1">
@@ -288,7 +338,10 @@ function GroupPane({ groupId }: { groupId: number }) {
   // Keep the conversation marked as read while it is open.
   useEffect(() => {
     if (!isMember || !messages.length) return;
-    api.post(`/chats/groups/${groupId}/read`).then(() => qc.invalidateQueries({ queryKey: ['chats'] }), () => {});
+    api.post(`/chats/groups/${groupId}/read`).then(
+      () => qc.invalidateQueries({ queryKey: ['chats'] }),
+      () => {}
+    );
   }, [groupId, isMember, messages.length, qc]);
 
   useEffect(() => {
@@ -361,10 +414,7 @@ function PaneSkeleton() {
 }
 
 const sameBlock = (a: ChatMessage | undefined, b: ChatMessage) =>
-  !!a &&
-  a.kind === 'message' &&
-  a.user_id === b.user_id &&
-  (parseTs(b.created_at)?.getTime() ?? 0) - (parseTs(a.created_at)?.getTime() ?? 0) < 5 * 60_000;
+  !!a && a.kind === 'message' && a.user_id === b.user_id && (parseTs(b.created_at)?.getTime() ?? 0) - (parseTs(a.created_at)?.getTime() ?? 0) < 5 * 60_000;
 
 function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; prev?: ChatMessage; own: boolean; seenBy?: string[] }) {
   const qc = useQueryClient();
@@ -392,7 +442,7 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
   const staff = isStaffRole(m.user_role);
   return (
     <div className={cn('flex gap-2', own && 'flex-row-reverse', !grouped && 'pt-3')}>
-      <div className="w-8 shrink-0">{!grouped && !own && <UserAvatar name={m.user_name} />}</div>
+      <div className="w-8 shrink-0">{!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} />}</div>
       <div className={cn('flex max-w-[75%] min-w-0 flex-col gap-1', own && 'items-end')}>
         {!grouped && (
           <div className={cn('flex items-center gap-2 text-xs', own && 'flex-row-reverse')}>
@@ -610,7 +660,7 @@ function MembersSheet({ data, onClose }: { data: GroupData; onClose: () => void 
         <ul className="min-h-0 flex-1 overflow-y-auto px-2">
           {members.map((m) => (
             <li key={m.id} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50">
-              <UserAvatar name={m.name} />
+              <UserAvatar name={m.name} userId={m.id} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">
                   {m.name}
@@ -659,7 +709,17 @@ function useCandidates(companyId: number | null, enabled: boolean) {
   });
 }
 
-function PeoplePicker({ people, selected, onToggle, exclude = [] }: { people: Candidate[]; selected: number[]; onToggle: (id: number) => void; exclude?: number[] }) {
+function PeoplePicker({
+  people,
+  selected,
+  onToggle,
+  exclude = [],
+}: {
+  people: Candidate[];
+  selected: number[];
+  onToggle: (id: number) => void;
+  exclude?: number[];
+}) {
   const [search, setSearch] = useState('');
   const term = search.trim().toLowerCase();
   const visible = people.filter((p) => !exclude.includes(p.id) && (!term || p.name.toLowerCase().includes(term) || p.email.toLowerCase().includes(term)));
@@ -772,7 +832,11 @@ function NewGroupDialog({ onClose }: { onClose: () => void }) {
           {(!isStaff || companyId) && (
             <div className="grid gap-2">
               <Label>Members</Label>
-              {candidates.isPending ? <Skeleton className="h-40" /> : <PeoplePicker people={people} selected={selected} onToggle={(id) => setSelected((s) => toggle(s, id))} />}
+              {candidates.isPending ? (
+                <Skeleton className="h-40" />
+              ) : (
+                <PeoplePicker people={people} selected={selected} onToggle={(id) => setSelected((s) => toggle(s, id))} />
+              )}
               <p className={cn('text-xs', includesAdmin ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-400')}>
                 {selected.length} selected{includesAdmin ? '' : ' · include at least one admin'}
               </p>
@@ -850,7 +914,10 @@ function TicketPane({ ticketId }: { ticketId: number }) {
 
   useEffect(() => {
     if (!count) return;
-    api.post(`/chats/tickets/${ticketId}/read`).then(() => qc.invalidateQueries({ queryKey: ['chats'] }), () => {});
+    api.post(`/chats/tickets/${ticketId}/read`).then(
+      () => qc.invalidateQueries({ queryKey: ['chats'] }),
+      () => {}
+    );
   }, [ticketId, count, qc]);
 
   if (query.isPending) return <PaneSkeleton />;

@@ -6,7 +6,7 @@ const express = require('express');
 const helmet = require('helmet');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
-const bcrypt = require('bcryptjs');
+const hasher = require('./src/hasher');
 const config = require('./src/config');
 const db = require('./src/db');
 const realtime = require('./src/realtime');
@@ -38,7 +38,7 @@ async function seedAdmin() {
   }
   await db.query(
     "INSERT INTO users (name, email, password_hash, role, is_active, notify_email, created_at) VALUES (?, ?, ?, 'admin', 1, 1, ?)",
-    [name, email.toLowerCase(), await bcrypt.hash(password, 11), now()]
+    [name, email.toLowerCase(), await hasher.hash(password, 11), now()]
   );
   console.log(`[setup] Created admin account ${email}`);
 }
@@ -48,7 +48,10 @@ async function main() {
   await seedAdmin();
 
   const app = express();
-  app.set('trust proxy', 1);
+  // How many proxies sit in front of the app (cPanel's web server is one). Each request's address, used by the
+  // rate limits, is read from the header the proxy adds. Set TRUST_PROXY=0 if the app is ever exposed directly,
+  // or visitors could fake their address and dodge the sign-in limit.
+  app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
   app.use(
     helmet({
@@ -66,6 +69,7 @@ async function main() {
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  app.use('/api', require('./src/uploads').limitRequestSize);
   app.use('/api', require('./src/routes'));
   // The service worker and manifest must be re-checked on every visit so app updates reach installed copies.
   app.get(['/sw.js', '/manifest.webmanifest'], (req, res, next) => {
@@ -79,6 +83,8 @@ async function main() {
   app.use(errorHandler);
 
   const server = http.createServer(app);
+  // Large email attachments can take a while to upload on slow connections.
+  server.requestTimeout = 30 * 60 * 1000;
   realtime.init(server);
   jobs.start();
   server.listen(config.port, () => console.log(`${config.appName} running on port ${config.port} (${config.db.client})`));

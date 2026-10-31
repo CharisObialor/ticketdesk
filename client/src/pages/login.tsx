@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CircleAlert, Headset, Loader2, MailCheck, MessagesSquare, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, CircleAlert, Clock, Headset, Loader2, MailCheck, MessagesSquare, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,7 +17,8 @@ import { api, errorMessage } from '@/lib/api';
 type Mode = 'signin' | 'forgot' | 'sent' | 'token';
 
 function safeNext(next: string | null) {
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  // Same-site paths only: "//host" and "/\host" are both read by browsers as another website.
+  return next && /^\/(?![/\\])/.test(next) && !/[\\\u0000-\u001f]/.test(next) ? next : '/';
 }
 
 export default function LoginPage() {
@@ -144,7 +145,7 @@ function LoginBackground() {
 function FormHeader({ title, description }: { title: string; description: string }) {
   return (
     <div className="mb-6 space-y-2 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+      <h1 className="type-h2">{title}</h1>
       <p className="text-sm text-muted-foreground">{description}</p>
     </div>
   );
@@ -186,6 +187,12 @@ function SignInForm({ onForgot }: { onForgot: () => void }) {
   return (
     <form onSubmit={submit} className="grid gap-5">
       <FormHeader title="Sign in to your account" description="Enter your email address and password to continue." />
+      {!error && params.get('reason') === 'idle' && (
+        <Alert>
+          <Clock />
+          <AlertDescription>You were signed out because there was no activity for a while. Please sign in again to continue.</AlertDescription>
+        </Alert>
+      )}
       {error && <ErrorAlert message={error} />}
       <div className="grid gap-2">
         <Label htmlFor="email">Email address</Label>

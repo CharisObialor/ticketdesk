@@ -10,7 +10,14 @@ export interface User {
   phone: string | null;
   company_id: number | null;
   company_name: string | null;
+  company_logo_url: string | null;
+  job_title: string | null;
   notify_email: boolean;
+  signature: string | null;
+  avatar: string | null;
+  avatar_url: string | null;
+  is_owner: boolean;
+  tour_done: boolean;
   is_active: boolean;
   has_password: boolean;
   last_login_at: string | null;
@@ -25,9 +32,13 @@ export interface AppMeta {
   priorities: Priority[];
   categories: string[];
   upload: { maxMb: number; maxFiles: number };
+  mailUpload: { maxTotalMb: number; maxFiles: number };
   slaMinutes: Record<Priority, number>;
   autoCloseDays: number;
   replyByEmail: boolean;
+  sessionIdleMinutes: number;
+  mailbox: string | null;
+  ai: boolean;
 }
 
 export interface Ticket {
@@ -44,6 +55,8 @@ export interface Ticket {
   priority: Priority;
   status: Status;
   escalated: number;
+  // Sign-off before closing: approvals the current resolution needs (0 when none).
+  signoff_required?: number;
   escalation_level: number;
   escalated_at: string | null;
   first_response_at: string | null;
@@ -74,6 +87,10 @@ export interface Message {
   created_at: string;
   edited_at: string | null;
   attachments: Attachment[];
+  cc: string[] | null;
+  bcc: string[] | null;
+  sender_name: string | null;
+  sender_email: string | null;
 }
 
 export interface ReadReceipt {
@@ -150,11 +167,23 @@ export interface Transcript {
   company_name?: string;
 }
 
+export interface CompanyContact {
+  id: number;
+  name: string;
+  email: string;
+  job_title: string | null;
+  phone: string | null;
+  is_active: boolean;
+}
+
 export interface Company {
   id: number;
   name: string;
   email_domain: string | null;
   notes: string | null;
+  rc_number: string | null;
+  logo_url: string | null;
+  contacts: CompanyContact[];
   is_active: number | boolean;
   created_at: string;
   user_count: number;
@@ -215,6 +244,7 @@ export interface ChatMessage {
 export interface StaffMember {
   id: number;
   name: string;
+  email: string;
   role: Role;
 }
 
@@ -273,4 +303,12 @@ export interface Metrics {
   }[];
   online: Presence;
   recent: Ticket[];
+}
+
+export interface SignoffState {
+  active: boolean;
+  required?: number;
+  approvals?: { user_id: number; name: string; comment: string | null; created_at: string }[];
+  requestedBy?: { id: number; name: string } | null;
+  requestedAt?: string;
 }

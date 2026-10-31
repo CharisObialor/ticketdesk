@@ -6,6 +6,7 @@ const router = require('express').Router();
 const config = require('../config');
 const db = require('../db');
 const notify = require('../notify');
+const mailer = require('../mailer');
 const realtime = require('../realtime');
 const backup = require('../backup');
 const inbound = require('../inbound');
@@ -13,6 +14,9 @@ const svc = require('../services/tickets');
 const { upload, cleanup, uploadsDir } = require('../uploads');
 const { requireAuth, requireStaff, requireAdmin, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
+
+// Site visits run from a 15-minute check to a week-long installation.
+const MAX_VISIT_MIN = 7 * 24 * 60;
 
 const clean = (v, max) => String(v ?? '').trim().slice(0, max);
 
@@ -124,6 +128,9 @@ const VISIT_SELECT = `SELECT v.*, u.name AS technician_name, u.phone AS technici
   LEFT JOIN users u ON u.id = v.technician_id
   LEFT JOIN users cu ON cu.id = t.created_by`;
 
+// Clients see when and who, but not the technician's private notes or phone number.
+const forViewer = (user, v) => (isStaff(user) ? v : { ...v, notes: null, technician_phone: null, created_by: null });
+
 async function loadVisit(req) {
   const v = await db.one(`${VISIT_SELECT} WHERE v.id = ?`, [Number(req.params.id)]);
   if (!v || !canAccessTicket(req.user, v)) throw new HttpError(404, 'Visit not found');
@@ -166,7 +173,7 @@ router.get(
 router.get(
   '/visits/:id',
   wrap(async (req, res) => {
-    res.json({ visit: await loadVisit(req) });
+    res.json({ visit: forViewer(req.user, await loadVisit(req)) });
   })
 );
 
@@ -180,7 +187,7 @@ router.post(
     const scheduledAt = parseWhen(req.body.scheduled_at);
     const technicianId = await validTechnician(req.body.technician_id);
     if (!technicianId) throw new HttpError(400, 'Choose a technician');
-    const duration = Math.min(Math.max(Number(req.body.duration_min) || 60, 15), 24 * 60);
+    const duration = Math.min(Math.max(Number(req.body.duration_min) || 60, 15), MAX_VISIT_MIN);
     const ts = now();
     const r = await db.query(
       `INSERT INTO site_visits (ticket_id, technician_id, scheduled_at, duration_min, location, notes, status, created_by, created_at, updated_at)
@@ -205,7 +212,7 @@ router.patch(
     const b = req.body;
     const scheduledAt = b.scheduled_at !== undefined ? parseWhen(b.scheduled_at) : v.scheduled_at;
     const technicianId = b.technician_id !== undefined ? await validTechnician(b.technician_id) : v.technician_id;
-    const duration = b.duration_min !== undefined ? Math.min(Math.max(Number(b.duration_min) || 60, 15), 1440) : v.duration_min;
+    const duration = b.duration_min !== undefined ? Math.min(Math.max(Number(b.duration_min) || 60, 15), MAX_VISIT_MIN) : v.duration_min;
     const location = b.location !== undefined ? clean(b.location, 255) || null : v.location;
     const notes = b.notes !== undefined ? clean(b.notes, 5000) || null : v.notes;
     await db.query('UPDATE site_visits SET scheduled_at = ?, technician_id = ?, duration_min = ?, location = ?, notes = ?, updated_at = ? WHERE id = ?', [
@@ -323,12 +330,26 @@ router.get(
       backupHour: config.backup.hour,
       backupKeep: config.backup.keep,
       email: {
-        outgoing: !!config.smtp.host,
+        outgoing: mailer.configured(),
+        provider: config.mailProvider === 'graph' && config.graph.clientId ? 'microsoft365' : config.smtp.host ? 'smtp' : 'none',
+        mailbox: config.mailProvider === 'graph' ? config.graph.mailbox || null : config.smtp.user || null,
+        sendAsStaff: mailer.configured() && config.mailProvider === 'graph' && config.graph.sendAsStaff ? config.graph.senderDomains : null,
         inbound: { ...inbound.status, address: config.inbound.address || null },
       },
+      outbox: await mailer.outboxStatus(),
       autoCloseDays: config.autoCloseDays,
+      sessionIdleMinutes: config.sessionIdleMinutes,
       chatDigestMinutes: config.chatDigestMinutes,
     });
+  })
+);
+
+router.post(
+  '/system/outbox/retry',
+  requireAdmin,
+  wrap(async (req, res) => {
+    await mailer.retryFailed(Array.isArray(req.body.ids) ? req.body.ids : []);
+    res.json({ ok: true });
   })
 );
 

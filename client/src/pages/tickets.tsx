@@ -1,18 +1,45 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Inbox, Plus, Search, X } from 'lucide-react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ChevronLeft,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
+  ExternalLink,
+  Flag,
+  Hash,
+  Inbox,
+  Link2,
+  Plus,
+  Search,
+  Ticket as TicketIcon,
+  UserCheck,
+  X,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { EmptyState, PageHeader } from '@/components/common';
+import { EmptyState, Greeting, PageHeader } from '@/components/common';
 import { EscalatedBadge, PriorityBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
 import { useSession } from '@/hooks/use-session';
-import { api, qs } from '@/lib/api';
-import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo } from '@/lib/format';
+import { api, errorMessage, qs } from '@/lib/api';
+import { OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo } from '@/lib/format';
 import type { Company, Priority, Status, Ticket } from '@/lib/types';
 
 const VIEW_TITLES: Record<string, { staff: [string, string]; client: [string, string] }> = {
@@ -41,8 +68,26 @@ const VIEW_TITLES: Record<string, { staff: [string, string]; client: [string, st
 const ALL = 'all';
 
 export default function TicketsPage() {
-  const { isStaff } = useSession();
+  const { isStaff, user } = useSession();
   const navigate = useNavigate();
+  const qc = useQueryClient();
+
+  // Right-click actions on a ticket row.
+  const copy = (text: string, what: string) =>
+    navigator.clipboard.writeText(text).then(
+      () => toast.success(`${what} copied`),
+      () => toast.error('Could not copy')
+    );
+  const change = async (t: Ticket, body: Record<string, unknown>, done: string) => {
+    try {
+      await api.patch(`/tickets/${t.id}`, body);
+      toast.success(done);
+      qc.invalidateQueries({ queryKey: ['tickets'] });
+      qc.invalidateQueries({ queryKey: ['counts'] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
   const [params, setParams] = useSearchParams();
   const view = params.get('view') || 'open';
   const page = Number(params.get('page')) || 1;
@@ -73,10 +118,7 @@ export default function TicketsPage() {
 
   const tickets = useQuery({
     queryKey: ['tickets', { view, page, priority, status, companyId, q }],
-    queryFn: () =>
-      api.get<{ tickets: Ticket[]; hasMore: boolean; page: number }>(
-        `/tickets${qs({ view, page, priority, status, company_id: companyId, q })}`
-      ),
+    queryFn: () => api.get<{ tickets: Ticket[]; hasMore: boolean; page: number }>(`/tickets${qs({ view, page, priority, status, company_id: companyId, q })}`),
     placeholderData: keepPreviousData,
   });
   const companies = useQuery({
@@ -85,7 +127,9 @@ export default function TicketsPage() {
     enabled: isStaff,
   });
 
-  const [title, description] = (VIEW_TITLES[view] ?? VIEW_TITLES.open)[isStaff ? 'staff' : 'client'];
+  const [viewTitle, description] = (VIEW_TITLES[view] ?? VIEW_TITLES.open)[isStaff ? 'staff' : 'client'];
+  // A client's home page greets them by name, like the staff dashboard.
+  const title = !isStaff && view === 'open' && user ? <Greeting name={user.name} /> : viewTitle;
   const filtered = !!(priority || status || companyId || q);
   const statusOptions: Status[] = view === 'resolved' ? ['resolved', 'closed'] : ['open', 'in_progress', 'awaiting_client'];
   const rows = tickets.data?.tickets ?? [];
@@ -204,40 +248,114 @@ export default function TicketsPage() {
             </TableHeader>
             <TableBody>
               {rows.map((t) => (
-                <TableRow key={t.id} className="cursor-pointer" onClick={() => navigate(`/tickets/${t.id}`)}>
-                  <TableCell className="pl-4 font-mono text-xs text-muted-foreground">#{t.id}</TableCell>
-                  <TableCell className="max-w-0">
-                    <div className="flex items-center gap-2">
-                      <Link to={`/tickets/${t.id}`} className="truncate font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
-                        {t.subject}
-                      </Link>
-                      {!!t.escalated && <EscalatedBadge level={t.escalation_level} />}
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {isStaff ? `${t.company_name} · ` : ''}
-                      {t.creator_name ?? 'Unknown'} · {t.category}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={t.status} />
-                  </TableCell>
-                  <TableCell>
-                    <PriorityBadge priority={t.priority} />
-                  </TableCell>
-                  {view !== 'resolved' && (
-                    <TableCell className="hidden sm:table-cell">
-                      <SlaBadge ticket={t} />
-                    </TableCell>
-                  )}
-                  {isStaff && (
-                    <TableCell className="hidden truncate text-sm lg:table-cell">
-                      {t.assignee_name ?? <span className="text-muted-foreground">Unassigned</span>}
-                    </TableCell>
-                  )}
-                  <TableCell className="hidden pr-4 text-right text-sm text-muted-foreground md:table-cell" title={formatDateTime(t.last_activity_at)}>
-                    {timeAgo(t.last_activity_at)}
-                  </TableCell>
-                </TableRow>
+                <ContextMenu key={t.id}>
+                  <ContextMenuTrigger asChild>
+                    <TableRow className="cursor-pointer" onClick={() => navigate(`/tickets/${t.id}`)}>
+                      <TableCell className="pl-4 font-mono text-xs text-muted-foreground">#{t.id}</TableCell>
+                      <TableCell className="max-w-0">
+                        <div className="flex items-center gap-2">
+                          <Link to={`/tickets/${t.id}`} className="truncate font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
+                            {t.subject}
+                          </Link>
+                          {!!t.escalated && <EscalatedBadge level={t.escalation_level} />}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {isStaff ? `${t.company_name} · ` : ''}
+                          {t.creator_name ?? 'Unknown'} · {t.category}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={t.status} />
+                        {t.status === 'resolved' && !!t.signoff_required && <div className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">Awaiting sign-off</div>}
+                      </TableCell>
+                      <TableCell>
+                        <PriorityBadge priority={t.priority} />
+                      </TableCell>
+                      {view !== 'resolved' && (
+                        <TableCell className="hidden sm:table-cell">
+                          <SlaBadge ticket={t} />
+                        </TableCell>
+                      )}
+                      {isStaff && (
+                        <TableCell className="hidden truncate text-sm lg:table-cell">
+                          {t.assignee_name ?? <span className="text-muted-foreground">Unassigned</span>}
+                        </TableCell>
+                      )}
+                      <TableCell className="hidden pr-4 text-right text-sm text-muted-foreground md:table-cell" title={formatDateTime(t.last_activity_at)}>
+                        {timeAgo(t.last_activity_at)}
+                      </TableCell>
+                    </TableRow>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-56">
+                    <ContextMenuItem onClick={() => navigate(`/tickets/${t.id}`)}>
+                      <TicketIcon />
+                      Open ticket
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => window.open(`/tickets/${t.id}`, '_blank', 'noopener')}>
+                      <ExternalLink />
+                      Open in new tab
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => copy(`${window.location.origin}/tickets/${t.id}`, 'Link')}>
+                      <Link2 />
+                      Copy link
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => copy(`#${t.id} ${t.subject}`, 'Ticket number')}>
+                      <Hash />
+                      Copy number and subject
+                    </ContextMenuItem>
+                    {isStaff && (
+                      <>
+                        <ContextMenuSeparator />
+                        {t.assigned_to !== user?.id && (
+                          <ContextMenuItem onClick={() => change(t, { assigned_to: user?.id }, `#${t.id} assigned to you`)}>
+                            <UserCheck />
+                            Assign to me
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger>
+                            <CircleDot />
+                            Change status
+                          </ContextMenuSubTrigger>
+                          <ContextMenuSubContent>
+                            {(Object.keys(STATUS_LABELS) as Status[])
+                              .filter((s) => s !== t.status)
+                              .map((s) => (
+                                <ContextMenuItem key={s} onClick={() => change(t, { status: s }, `#${t.id} is now ${STATUS_LABELS[s]}`)}>
+                                  {STATUS_LABELS[s]}
+                                </ContextMenuItem>
+                              ))}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger>
+                            <Flag />
+                            Change priority
+                          </ContextMenuSubTrigger>
+                          <ContextMenuSubContent>
+                            {(Object.keys(PRIORITY_LABELS) as Priority[])
+                              .filter((p) => p !== t.priority)
+                              .map((p) => (
+                                <ContextMenuItem key={p} onClick={() => change(t, { priority: p }, `#${t.id} priority set to ${PRIORITY_LABELS[p]}`)}>
+                                  {PRIORITY_LABELS[p]}
+                                </ContextMenuItem>
+                              ))}
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
+                      </>
+                    )}
+                    {!isStaff && OPEN_STATUSES.includes(t.status) && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => change(t, { status: 'resolved' }, `#${t.id} marked as resolved`)}>
+                          <CircleCheck />
+                          Mark as resolved
+                        </ContextMenuItem>
+                      </>
+                    )}
+                  </ContextMenuContent>
+                </ContextMenu>
               ))}
             </TableBody>
           </Table>

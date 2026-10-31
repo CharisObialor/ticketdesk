@@ -28,6 +28,9 @@ const TABLES = [
   'chat_messages',
   'chat_attachments',
   'notifications',
+  'ai_insights',
+  'action_states',
+  'mail_outbox',
 ];
 
 let running = null;

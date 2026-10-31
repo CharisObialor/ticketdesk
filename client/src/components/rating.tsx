@@ -125,7 +125,7 @@ export function StaffRatingCard({ rating }: { rating: Rating }) {
   return (
     <Card className="gap-3">
       <CardHeader>
-        <CardTitle className="text-sm">Client rating</CardTitle>
+        <CardTitle className="type-h5">Client rating</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         <div className="flex items-center gap-2">

@@ -133,12 +133,16 @@ router.get(
           SELECT COUNT(*) FROM chat_messages cm WHERE cm.group_id = g.id AND cm.kind = 'message'
             AND (cm.user_id IS NULL OR cm.user_id <> ?) AND cm.id > m.last_read_id
         ) END AS unread
-       FROM chat_groups g
+       FROM (${
+         isAdmin(u)
+           ? 'SELECT * FROM chat_groups ORDER BY last_message_at DESC LIMIT ?'
+           : 'SELECT g.* FROM chat_groups g JOIN chat_members mm ON mm.group_id = g.id AND mm.user_id = ? ORDER BY g.last_message_at DESC LIMIT ?'
+       }) g
        JOIN companies c ON c.id = g.company_id
        LEFT JOIN chat_members m ON m.group_id = g.id AND m.user_id = ?
-       ${isAdmin(u) ? '' : 'WHERE m.user_id IS NOT NULL'}
-       ORDER BY g.last_message_at DESC LIMIT ?`,
-      [u.id, u.id, INBOX_LIMIT]
+       ORDER BY g.last_message_at DESC`,
+      // The newest conversations are picked first, so previews and unread counts are only worked out for those.
+      [u.id, ...(isAdmin(u) ? [] : [u.id]), INBOX_LIMIT, u.id]
     );
 
     // Unread counts only apply to tickets this user is following: ones they have opened, or that are theirs.
@@ -152,12 +156,11 @@ router.get(
           SELECT COUNT(*) FROM messages tm WHERE tm.ticket_id = t.id AND tm.kind = 'message' ${internal}
             AND (tm.user_id IS NULL OR tm.user_id <> ?) AND tm.id > COALESCE(r.last_read_id, 0)
         ) END AS unread
-       FROM tickets t
+       FROM (SELECT * FROM tickets ${staff ? '' : 'WHERE company_id = ?'} ORDER BY last_activity_at DESC LIMIT ?) t
        JOIN companies c ON c.id = t.company_id
        LEFT JOIN ticket_reads r ON r.ticket_id = t.id AND r.user_id = ?
-       ${staff ? '' : 'WHERE t.company_id = ?'}
-       ORDER BY t.last_activity_at DESC LIMIT ?`,
-      [u.id, u.id, u.id, ...(staff ? [] : [u.company_id]), INBOX_LIMIT]
+       ORDER BY t.last_activity_at DESC`,
+      [u.id, u.id, ...(staff ? [] : [u.company_id]), INBOX_LIMIT, u.id]
     );
 
     const items = [

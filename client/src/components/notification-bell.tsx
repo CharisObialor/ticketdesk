@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
+  ListTodo,
   CalendarClock,
   CheckCheck,
   CircleCheck,
@@ -11,8 +12,7 @@ import {
   TriangleAlert,
   UserCheck,
   Users,
-  type LucideIcon,
-} from 'lucide-react';
+  type LucideIcon, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -36,6 +36,8 @@ const ICONS: Record<string, LucideIcon> = {
   rating: Star,
   visit: CalendarClock,
   group: Users,
+  action: ListTodo,
+  signoff: ShieldCheck,
 };
 
 export function NotificationBell() {

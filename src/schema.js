@@ -182,6 +182,19 @@ CREATE TABLE IF NOT EXISTS ticket_ratings (
   CONSTRAINT fk_rt_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS ticket_signoffs (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ticket_id INT UNSIGNED NOT NULL,
+  round INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NULL,
+  decision VARCHAR(20) NOT NULL,
+  comment TEXT NULL,
+  created_at DATETIME NOT NULL,
+  UNIQUE KEY uq_signoff (ticket_id, round, user_id),
+  CONSTRAINT fk_so_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+  CONSTRAINT fk_so_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS site_visits (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   ticket_id INT UNSIGNED NOT NULL,
@@ -216,6 +229,43 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at DATETIME NOT NULL,
   KEY idx_n_user (user_id, id),
   CONSTRAINT fk_n_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ai_insights (
+  ticket_id INT UNSIGNED NOT NULL PRIMARY KEY,
+  last_message_id INT UNSIGNED NOT NULL DEFAULT 0,
+  data MEDIUMTEXT NOT NULL,
+  model VARCHAR(60) NULL,
+  created_at DATETIME NOT NULL,
+  CONSTRAINT fk_ai_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS action_states (
+  user_id INT UNSIGNED NOT NULL,
+  action_key VARCHAR(120) NOT NULL,
+  status VARCHAR(16) NULL,
+  snooze_until DATETIME NULL,
+  reason VARCHAR(255) NULL,
+  first_seen_at DATETIME NOT NULL,
+  reminded_at DATETIME NULL,
+  urgent_emailed_at DATETIME NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, action_key),
+  CONSTRAINT fk_as_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS mail_outbox (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  recipient VARCHAR(255) NOT NULL,
+  subject VARCHAR(255) NULL,
+  payload MEDIUMTEXT NOT NULL,
+  status VARCHAR(10) NOT NULL DEFAULT 'pending',
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at DATETIME NOT NULL,
+  last_error VARCHAR(500) NULL,
+  created_at DATETIME NOT NULL,
+  sent_at DATETIME NULL,
+  KEY idx_mo_due (status, next_attempt_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
@@ -300,6 +350,11 @@ CREATE TABLE IF NOT EXISTS ticket_ratings (
   rating INTEGER NOT NULL, comment TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rt_created ON ticket_ratings(created_at);
+CREATE TABLE IF NOT EXISTS ticket_signoffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  round INTEGER NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, decision TEXT NOT NULL, comment TEXT,
+  created_at TEXT NOT NULL, UNIQUE (ticket_id, round, user_id)
+);
 CREATE TABLE IF NOT EXISTS site_visits (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
   technician_id INTEGER REFERENCES users(id) ON DELETE SET NULL, scheduled_at TEXT NOT NULL, duration_min INTEGER NOT NULL DEFAULT 60,
@@ -313,13 +368,65 @@ CREATE TABLE IF NOT EXISTS notifications (
   kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, link TEXT, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_n_user ON notifications(user_id, id);
+CREATE TABLE IF NOT EXISTS ai_insights (
+  ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE, last_message_id INTEGER NOT NULL DEFAULT 0,
+  data TEXT NOT NULL, model TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS action_states (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, action_key TEXT NOT NULL, status TEXT, snooze_until TEXT,
+  reason TEXT, first_seen_at TEXT NOT NULL, reminded_at TEXT, urgent_emailed_at TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, action_key)
+);
+CREATE TABLE IF NOT EXISTS mail_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, subject TEXT, payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
+  last_error TEXT, created_at TEXT NOT NULL, sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mo_due ON mail_outbox(status, next_attempt_at);
 `;
 
-// Columns added after the first release. Each is added once, on startup, if missing: [table, column, mysql type, sqlite type].
+// Columns added after the first release. Each is added once, on startup, if missing:
+// [table, column, mysql type, sqlite type, optional SQL run once right after adding it].
 const columns = [
   ['messages', 'edited_at', 'DATETIME NULL', 'TEXT'],
   ['chat_messages', 'edited_at', 'DATETIME NULL', 'TEXT'],
   ['chat_members', 'last_emailed_id', 'INT UNSIGNED NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  // CC/BCC on staff replies (JSON arrays of addresses), and the sender of replies from people outside the portal.
+  ['users', 'signature', 'TEXT NULL', 'TEXT'],
+  ['users', 'avatar', 'VARCHAR(80) NULL', 'TEXT'],
+  // When the user finished (or skipped) the first-login tour. People who existed before the tour count as done.
+  ['companies', 'logo', 'VARCHAR(80) NULL', 'TEXT'],
+  ['companies', 'rc_number', 'VARCHAR(40) NULL', 'TEXT'],
+  // The person's position at their company, e.g. IT Manager (separate from their portal role).
+  ['users', 'job_title', 'VARCHAR(120) NULL', 'TEXT'],
+  // Sign-off before closing: the current round, how many approvals it needs, and who asked.
+  ['tickets', 'signoff_round', 'INT UNSIGNED NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['tickets', 'signoff_required', 'TINYINT UNSIGNED NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['tickets', 'signoff_requested_by', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['tickets', 'signoff_requested_at', 'DATETIME NULL', 'TEXT'],
+  ['users', 'tour_done_at', 'DATETIME NULL', 'TEXT', 'UPDATE users SET tour_done_at = created_at'],
+  ['messages', 'cc', 'TEXT NULL', 'TEXT'],
+  ['messages', 'bcc', 'TEXT NULL', 'TEXT'],
+  ['messages', 'sender_name', 'VARCHAR(190) NULL', 'TEXT'],
+  ['messages', 'sender_email', 'VARCHAR(190) NULL', 'TEXT'],
 ];
 
-module.exports = { mysql, sqlite, columns };
+// Indexes added after the first release, created once on startup if missing: [table, index name, columns].
+// The "cover" indexes hold every column the dashboard and reports read, so long periods are answered from the index alone.
+const indexes = [
+  ['tickets', 'idx_t_created_cover', 'created_at, company_id, priority, category, first_response_at'],
+  ['tickets', 'idx_t_resolved_cover', 'resolved_at, created_at, assigned_to'],
+  ['tickets', 'idx_t_escalated_at', 'escalated_at'],
+  ['messages', 'idx_m_created_kind', 'created_at, kind'],
+  ['users', 'idx_u_company', 'company_id'],
+  ['tickets', 'idx_t_company_status', 'company_id, status'],
+  // Latest message and unread counts per conversation, for the Messages inbox.
+  ['messages', 'idx_m_ticket_id', 'ticket_id, id'],
+  ['chat_messages', 'idx_chm_group_id', 'group_id, id'],
+  ['tickets', 'idx_t_company_activity', 'company_id, last_activity_at'],
+  ['chat_groups', 'idx_cg_last', 'last_message_at'],
+  // Sidebar counts and team workload, answered from the index alone.
+  ['tickets', 'idx_t_status_assigned', 'status, assigned_to, escalated'],
+];
+
+module.exports = { mysql, sqlite, columns, indexes };

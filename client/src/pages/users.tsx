@@ -1,13 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Mail, MoreHorizontal, Pencil, Plus, Search, Users as UsersIcon } from 'lucide-react';
+import { Building2, Copy, Loader2, Mail, MoreHorizontal, Pencil, Plus, Search, Send, Users as UsersIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +26,9 @@ const ALL = 'all';
 
 export default function UsersPage() {
   const { isAdmin, user: me } = useSession();
+  const isOwner = !!me?.is_owner;
+  // Admin accounts are managed by the owner only.
+  const canManage = (u: User) => isAdmin && (u.role !== 'admin' || isOwner);
   const [params, setParams] = useSearchParams();
   const companyId = params.get('company_id') || '';
   const [role, setRole] = useState(ALL);
@@ -123,76 +127,147 @@ export default function UsersPage() {
             </TableHeader>
             <TableBody>
               {rows.map((u) => (
-                <TableRow key={u.id}>
-                  <TableCell className="pl-4">
-                    <div className="flex items-center gap-3">
-                      <UserAvatar name={u.name} />
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">
-                          {u.name}
-                          {u.id === me?.id && <span className="ml-1 text-xs font-normal text-muted-foreground">(you)</span>}
+                <ContextMenu key={u.id}>
+                  <ContextMenuTrigger asChild>
+                    <TableRow>
+                      <TableCell className="pl-4">
+                        <div className="flex items-center gap-3">
+                          <UserAvatar name={u.name} userId={u.id} />
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">
+                              {u.name}
+                              {u.id === me?.id && <span className="ml-1 text-xs font-normal text-muted-foreground">(you)</span>}
+                              {u.is_owner && (
+                                <Badge variant="outline" className="ml-1.5 font-normal">
+                                  Owner
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              {u.job_title ? `${u.job_title} · ` : ''}
+                              {u.email}
+                            </div>
+                          </div>
                         </div>
-                        <div className="truncate text-xs text-muted-foreground">{u.email}</div>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={u.role === 'client' ? 'outline' : 'secondary'}>{ROLE_LABELS[u.role]}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground md:table-cell">{u.company_name ?? '-'}</TableCell>
-                  <TableCell className="hidden text-muted-foreground lg:table-cell">{u.last_login_at ? timeAgo(u.last_login_at) : 'Never'}</TableCell>
-                  <TableCell className="hidden sm:table-cell">
-                    {!u.is_active ? (
-                      <Badge variant="outline">Disabled</Badge>
-                    ) : !u.has_password ? (
-                      <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400">
-                        Invited
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary">Active</Badge>
-                    )}
-                  </TableCell>
-                  {isAdmin && (
-                    <TableCell className="pr-4">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${u.name}`}>
-                            <MoreHorizontal />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setEditing(u)}>
-                            <Pencil />
-                            Edit user
-                          </DropdownMenuItem>
-                          {u.is_active && (
-                            <DropdownMenuItem onClick={() => invite(u)}>
-                              <Mail />
-                              {u.has_password ? 'Send password setup link' : 'Resend invitation'}
-                            </DropdownMenuItem>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={u.role === 'client' ? 'outline' : 'secondary'}>{ROLE_LABELS[u.role]}</Badge>
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground md:table-cell">{u.company_name ?? '-'}</TableCell>
+                      <TableCell className="hidden text-muted-foreground lg:table-cell">{u.last_login_at ? timeAgo(u.last_login_at) : 'Never'}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        {!u.is_active ? (
+                          <Badge variant="outline">Disabled</Badge>
+                        ) : !u.has_password ? (
+                          <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400">
+                            Invited
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">Active</Badge>
+                        )}
+                      </TableCell>
+                      {isAdmin && (
+                        <TableCell className="pr-4">
+                          {canManage(u) && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${u.name}`}>
+                                  <MoreHorizontal />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => setEditing(u)}>
+                                  <Pencil />
+                                  Edit user
+                                </DropdownMenuItem>
+                                {u.is_active && (
+                                  <DropdownMenuItem onClick={() => invite(u)}>
+                                    <Mail />
+                                    {u.has_password ? 'Send password setup link' : 'Resend invitation'}
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  )}
-                </TableRow>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-60">
+                    {isAdmin && canManage(u) && (
+                      <ContextMenuItem onClick={() => setEditing(u)}>
+                        <Pencil />
+                        Edit user
+                      </ContextMenuItem>
+                    )}
+                    {isAdmin && canManage(u) && u.is_active && (
+                      <ContextMenuItem onClick={() => invite(u)}>
+                        <Send />
+                        {u.has_password ? 'Send password setup link' : 'Resend invitation'}
+                      </ContextMenuItem>
+                    )}
+                    {isAdmin && canManage(u) && <ContextMenuSeparator />}
+                    <ContextMenuItem asChild>
+                      <a href={`mailto:${u.email}`}>
+                        <Mail />
+                        Email {u.name.split(' ')[0]}
+                      </a>
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() =>
+                        navigator.clipboard.writeText(u.email).then(
+                          () => toast.success('Email address copied'),
+                          () => toast.error('Could not copy')
+                        )
+                      }
+                    >
+                      <Copy />
+                      Copy email address
+                    </ContextMenuItem>
+                    {u.company_id && (
+                      <ContextMenuItem onClick={() => setParams({ company_id: String(u.company_id) })}>
+                        <Building2 />
+                        Show everyone at {u.company_name ?? 'this company'}
+                      </ContextMenuItem>
+                    )}
+                  </ContextMenuContent>
+                </ContextMenu>
               ))}
             </TableBody>
           </Table>
         )}
       </Card>
       {editing && (
-        <UserDialog user={editing === 'new' ? null : editing} companies={companies.data?.companies ?? []} defaultCompanyId={companyId} onClose={() => setEditing(null)} />
+        <UserDialog
+          user={editing === 'new' ? null : editing}
+          companies={companies.data?.companies ?? []}
+          defaultCompanyId={companyId}
+          canMakeAdmin={isOwner}
+          onClose={() => setEditing(null)}
+        />
       )}
     </>
   );
 }
 
-function UserDialog({ user, companies, defaultCompanyId, onClose }: { user: User | null; companies: Company[]; defaultCompanyId: string; onClose: () => void }) {
+function UserDialog({
+  user,
+  companies,
+  defaultCompanyId,
+  canMakeAdmin,
+  onClose,
+}: {
+  user: User | null;
+  companies: Company[];
+  defaultCompanyId: string;
+  canMakeAdmin: boolean;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const [name, setName] = useState(user?.name ?? '');
   const [email, setEmail] = useState(user?.email ?? '');
   const [phone, setPhone] = useState(user?.phone ?? '');
+  const [jobTitle, setJobTitle] = useState(user?.job_title ?? '');
   const [role, setRole] = useState<Role>(user?.role ?? 'client');
   const [companyId, setCompanyId] = useState(user?.company_id ? String(user.company_id) : defaultCompanyId);
   const [active, setActive] = useState(user ? user.is_active : true);
@@ -204,7 +279,7 @@ function UserDialog({ user, companies, defaultCompanyId, onClose }: { user: User
     e.preventDefault();
     if (role === 'client' && !companyId) return toast.error('Client users must belong to a company');
     setBusy(true);
-    const body = { name, phone, role, company_id: role === 'client' ? Number(companyId) : null, is_active: active, notify_email: notify };
+    const body = { name, phone, job_title: jobTitle, role, company_id: role === 'client' ? Number(companyId) : null, is_active: active, notify_email: notify };
     try {
       if (user) await api.patch(`/users/${user.id}`, body);
       else await api.post('/users', { ...body, email, send_invite: sendInvite });
@@ -241,6 +316,16 @@ function UserDialog({ user, companies, defaultCompanyId, onClose }: { user: User
             </div>
           </div>
           <div className="grid gap-2">
+            <Label htmlFor="user-title">Position</Label>
+            <Input
+              id="user-title"
+              maxLength={120}
+              placeholder={role === 'client' ? 'For example: IT Manager, Head of Operations' : 'For example: Support Engineer'}
+              value={jobTitle}
+              onChange={(e) => setJobTitle(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="user-email">Email address *</Label>
             <Input id="user-email" type="email" required disabled={!!user} value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
@@ -255,7 +340,7 @@ function UserDialog({ user, companies, defaultCompanyId, onClose }: { user: User
                   <SelectItem value="client">Client</SelectItem>
                   <SelectItem value="agent">Agent</SelectItem>
                   <SelectItem value="technician">Technician</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
+                  {canMakeAdmin && <SelectItem value="admin">Admin</SelectItem>}
                 </SelectContent>
               </Select>
             </div>

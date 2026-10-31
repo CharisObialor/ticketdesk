@@ -7,28 +7,48 @@ import { fileSize } from '@/lib/format';
 import { optimiseImage } from '@/lib/image';
 import { cn } from '@/lib/utils';
 
-// Adds files while enforcing the server's count and size limits.
-export function useFileList() {
+// Adds files while enforcing the server's count and size limits. `kind: 'mail'` uses the Mail page's larger,
+// per-email total limit instead of the per-file limit for portal uploads.
+export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' } = {}) {
   const { app } = useSession();
   const [files, setFiles] = useState<File[]>([]);
-  const maxFiles = app?.upload.maxFiles ?? 10;
-  const maxMb = app?.upload.maxMb ?? 25;
+  const mail = kind === 'mail';
+  const maxFiles = (mail ? app?.mailUpload?.maxFiles : app?.upload.maxFiles) ?? 5;
+  const maxMb = (mail ? app?.mailUpload?.maxTotalMb : app?.upload.maxMb) ?? 10;
+  const totalBytes = files.reduce((n, f) => n + f.size, 0);
 
   const add = async (incoming: FileList | File[] | null) => {
     if (!incoming) return;
     // Large photos are resized and re-encoded first, so uploads are faster and storage stays small.
     const list = await Promise.all(Array.from(incoming).map(optimiseImage));
-    const tooBig = list.filter((f) => f.size > maxMb * 1024 * 1024);
-    if (tooBig.length) toast.error(`${tooBig.map((f) => f.name).join(', ')} ${tooBig.length === 1 ? 'is' : 'are'} larger than ${maxMb} MB`);
+    const limit = maxMb * 1024 * 1024;
     setFiles((cur) => {
-      const next = [...cur, ...list.filter((f) => f.size <= maxMb * 1024 * 1024)];
+      const next = [...cur];
+      const rejected: string[] = [];
+      let total = cur.reduce((n, f) => n + f.size, 0);
+      for (const f of list) {
+        // Portal uploads: each file within the limit. Email: all attachments together within the limit.
+        const fits = mail ? total + f.size <= limit : f.size <= limit;
+        if (!fits) rejected.push(f.name);
+        else {
+          next.push(f);
+          total += f.size;
+        }
+      }
+      if (rejected.length) {
+        toast.error(
+          mail
+            ? `${rejected.join(', ')} would take this email over ${maxMb} MB of attachments`
+            : `${rejected.join(', ')} ${rejected.length === 1 ? 'is' : 'are'} larger than ${maxMb} MB`
+        );
+      }
       if (next.length > maxFiles) toast.error(`You can attach up to ${maxFiles} files`);
       return next.slice(0, maxFiles);
     });
   };
   const remove = (i: number) => setFiles((cur) => cur.filter((_, j) => j !== i));
   const clear = () => setFiles([]);
-  return { files, add, remove, clear, maxFiles, maxMb };
+  return { files, add, remove, clear, maxFiles, maxMb, totalBytes, kind };
 }
 
 export type FileListState = ReturnType<typeof useFileList>;

@@ -3,14 +3,28 @@ const db = require('../db');
 const notify = require('../notify');
 const realtime = require('../realtime');
 const transcript = require('../transcript');
+const signoff = require('../signoff');
 const svc = require('../services/tickets');
 const { upload, cleanup } = require('../uploads');
-const { requireAuth, requireStaff, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
-const { wrap, now, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, CATEGORIES, STATUS_LABELS } = require('../util');
+const { requireAuth, requireStaff, requireAdmin, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
+const mailer = require('../mailer');
+const { signatureFor, avatarUrl } = require('../email-template');
+const { wrap, now, parseTs, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, CATEGORIES, STATUS_LABELS } = require('../util');
+const config = require('../config');
 
 router.use(requireAuth);
 
 const PAGE_SIZE = 50;
+const EMAIL_RE = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
+function emailList(v) {
+  const list = String(v || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const bad = list.filter((e) => !EMAIL_RE.test(e));
+  if (bad.length) throw new HttpError(400, `Not a valid email address: ${bad.join(', ')}`);
+  return [...new Set(list)];
+}
 const clean = (v, max) => String(v ?? '').trim().slice(0, max);
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -124,7 +138,7 @@ router.post(
   withFiles(async (req, res) => {
     const u = req.user;
     const staff = isStaff(u);
-    const subject = clean(req.body.subject, 255);
+    const subject = clean(req.body.subject, 255).replace(/[\r\n\t]+/g, ' '); // subjects go into email headers
     const body = clean(req.body.body, 50000);
     if (!subject || !body) throw new HttpError(400, 'Subject and description are required');
     const priority = PRIORITIES.includes(req.body.priority) ? req.body.priority : 'normal';
@@ -171,7 +185,9 @@ router.get(
         [t.id]
       ),
     ]);
-    res.json({ ticket: t, messages, transcripts, reads, rating, visits });
+    // Visit notes are instructions for the technician (access codes, contacts), so clients do not get them.
+    const visibleVisits = staff ? visits : visits.map((v) => ({ ...v, notes: null, created_by: null }));
+    res.json({ ticket: t, messages, transcripts, reads, rating, visits: visibleVisits, signoff: staff ? await signoff.state(t) : { active: signoff.pending(t) } });
   })
 );
 
@@ -186,7 +202,11 @@ router.post(
     if (!body && !req.files.length) throw new HttpError(400, 'Write a message or attach a file');
     if (!staff && t.status === 'closed') throw new HttpError(400, 'This ticket is closed. Please open a new ticket.');
     const internal = staff && ['1', 'true'].includes(String(req.body.internal));
-    const result = await svc.postReply(t, u, { body: body || '(attachment)', internal, files: req.files });
+    // Admins can copy other people into a reply; it is then emailed from their own mailbox with the files attached.
+    const cc = !internal && u.role === 'admin' ? emailList(req.body.cc) : [];
+    const bcc = !internal && u.role === 'admin' ? emailList(req.body.bcc) : [];
+    if (cc.length + bcc.length > 50) throw new HttpError(400, 'Too many CC/BCC recipients (50 at most)');
+    const result = await svc.postReply(t, u, { body: body || '(attachment)', internal, files: req.files, cc, bcc });
     res.status(201).json(result);
   })
 );
@@ -253,6 +273,12 @@ router.patch(
       const clientAllowed =
         (b.status === 'resolved' && OPEN_STATUSES.includes(t.status)) || (b.status === 'open' && t.status === 'resolved');
       if (!staff && !clientAllowed) throw new HttpError(403, 'You cannot make that change');
+      // Closing goes through sign-off: mark the ticket resolved and other admins approve it.
+      if (b.status === 'closed' && (await signoff.requiredFor(u.id)) > 0) {
+        throw new HttpError(409, signoff.pending(t)
+          ? 'This ticket is waiting for sign-off. It closes once the other admins approve it.'
+          : 'Mark the ticket as Resolved first. It closes once two other admins sign it off.');
+      }
       fields.status = b.status;
       fields.resolved_at = ['resolved', 'closed'].includes(b.status) ? t.resolved_at || now() : null;
       statusTo = b.status;
@@ -292,6 +318,9 @@ router.patch(
       await svc.systemMessage(updated, u, 'Escalation cleared.');
     }
 
+    // A new resolution asks the other admins to sign off before the ticket can close.
+    if (statusTo === 'resolved') updated = await signoff.start(updated, u);
+
     if (statusTo) {
       notify.statusChanged(updated, u, t.status, statusTo, staff);
       if (['resolved', 'closed'].includes(statusTo)) {
@@ -319,6 +348,80 @@ router.get(
     const messages = await svc.getMessages(t.id, includeInternal);
     res.attachment(`ticket-${t.id}-transcript.${ext}`);
     res.type(type).send(build(t, messages, { includeInternal }));
+  })
+);
+
+// Admins can send a ticket on to anyone (a vendor, a manager, a colleague without an account): its details, the
+// conversation so far and the full transcript attached. Internal notes are never included.
+router.post(
+  '/:id/email',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    const list = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[,;\s]+/)).map((s) => String(s).trim().toLowerCase()).filter(Boolean))];
+    const to = list(req.body.to);
+    const cc = list(req.body.cc);
+    const bad = [...to, ...cc].filter((e) => !EMAIL_RE.test(e));
+    if (bad.length) throw new HttpError(400, `Not a valid email address: ${bad.join(', ')}`);
+    if (!to.length) throw new HttpError(400, 'Add at least one recipient');
+    if (to.length + cc.length > 20) throw new HttpError(400, 'Send to 20 people at most');
+    const note = clean(req.body.note, 5000);
+
+    const messages = await svc.getMessages(t.id, false);
+    const when = (ts) => parseTs(ts).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: config.timezone });
+    const conversation = messages
+      .filter((m) => m.kind === 'message')
+      .slice(-10)
+      .map((m) => `${m.user_name || m.sender_name || 'Unknown'}, ${when(m.created_at)}:\n${m.body}`)
+      .join('\n\n');
+    const u = req.user;
+    const { html, text } = mailer.render({
+      heading: `Ticket #${t.id}: ${t.subject}`,
+      icon: 'ticket',
+      status: t.status,
+      greeting: 'Hello,',
+      intro: `${u.name} has shared a support ticket with you.`,
+      paragraphs: note ? [note] : [],
+      details: [
+        ['Company', t.company_name],
+        ['Raised by', t.creator_name || '-'],
+        ['Status', STATUS_LABELS[t.status]],
+        ['Priority', cap(t.priority)],
+        ['Category', t.category],
+        ['Handled by', t.assignee_name || 'Not yet assigned'],
+        ['Opened', when(t.created_at)],
+      ],
+      quote: conversation || null,
+      quoteLabel: messages.length > 10 ? 'Latest messages (the full conversation is attached)' : 'Conversation',
+      signature: signatureFor(u),
+      signatureAvatar: avatarUrl(u),
+      footer: 'shared',
+    });
+    mailer.send({
+      to: to.join(', '),
+      cc,
+      subject: `Ticket #${t.id}: ${t.subject}`,
+      html,
+      text,
+      sender: u,
+      replyTo: u.email,
+      attachments: [{ filename: `ticket-${t.id}-conversation.html`, content: transcript.toHtml(t, messages, { includeInternal: false }), contentType: 'text/html' }],
+    });
+    // A note for the team (never shown to the client) recording who it went to.
+    await svc.addMessage(t, u, { body: `${u.name} emailed this ticket to ${[...to, ...cc].join(', ')}.${note ? ` Note: ${note}` : ''}`, internal: true, kind: 'system' });
+    res.json({ ok: true, sentTo: [...to, ...cc] });
+  })
+);
+
+// An admin approves a resolved ticket, or sends it back to be worked on with a reason.
+router.post(
+  '/:id/signoff',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    const decision = req.body.decision === 'approve' ? 'approved' : req.body.decision === 'reject' ? 'rejected' : null;
+    const result = await signoff.decide(t, req.user, decision, clean(req.body.comment, 2000));
+    res.json({ ticket: result.ticket, closed: result.closed, signoff: await signoff.state(result.ticket) });
   })
 );
 

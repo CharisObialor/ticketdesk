@@ -32,38 +32,65 @@ async function getMessages(ticketId, includeInternal) {
     if (!byMessage.has(a.message_id)) byMessage.set(a.message_id, []);
     byMessage.get(a.message_id).push(a);
   }
-  for (const m of messages) m.attachments = byMessage.get(m.id) || [];
+  for (const m of messages) {
+    m.attachments = byMessage.get(m.id) || [];
+    m.cc = m.cc ? JSON.parse(m.cc) : null;
+    // BCC is only visible to staff (includeInternal is true only for staff).
+    m.bcc = includeInternal && m.bcc ? JSON.parse(m.bcc) : null;
+  }
   return messages;
 }
 
-async function addMessage(ticket, user, { body, internal = false, kind = 'message', files = [] }) {
+// `user` is a portal user, or { external: true, name, email } for someone replying by email from outside the portal
+// (a person an admin CC'd). `cc`/`bcc` are the extra recipients an admin added to a reply.
+async function addMessage(ticket, user, { body, internal = false, kind = 'message', files = [], cc = [], bcc = [] }) {
   const ts = now();
+  const external = !!(user && user.external);
+  const userId = user && !external ? user.id : null;
   const r = await db.query(
-    'INSERT INTO messages (ticket_id, user_id, body, is_internal, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [ticket.id, user ? user.id : null, body, internal, kind, ts]
+    `INSERT INTO messages (ticket_id, user_id, body, is_internal, kind, created_at, cc, bcc, sender_name, sender_email)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      ticket.id,
+      userId,
+      body,
+      internal,
+      kind,
+      ts,
+      cc.length ? JSON.stringify(cc) : null,
+      bcc.length ? JSON.stringify(bcc) : null,
+      external ? user.name : null,
+      external ? user.email : null,
+    ]
   );
   const attachments = [];
   for (const f of files) {
     const a = await db.query(
       `INSERT INTO attachments (ticket_id, message_id, user_id, original_name, stored_name, mime, size, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ticket.id, r.insertId, user ? user.id : null, f.originalname, f.filename, f.mimetype, f.size, ts]
+      [ticket.id, r.insertId, userId, f.originalname, f.filename, f.mimetype, f.size, ts]
     );
     attachments.push({ id: a.insertId, message_id: r.insertId, original_name: f.originalname, mime: f.mimetype, size: f.size, created_at: ts });
   }
   const message = {
     id: r.insertId,
     ticket_id: ticket.id,
-    user_id: user ? user.id : null,
-    user_name: user ? user.name : null,
-    user_role: user ? user.role : null,
+    user_id: userId,
+    user_name: user && !external ? user.name : null,
+    user_role: user && !external ? user.role : null,
+    sender_name: external ? user.name : null,
+    sender_email: external ? user.email : null,
     body,
     is_internal: internal ? 1 : 0,
     kind,
+    cc: cc.length ? cc : null,
+    bcc: bcc.length ? bcc : null,
     created_at: ts,
     attachments,
   };
-  realtime.toTicket(ticket, 'message:new', { ticketId: ticket.id, message }, { internal });
+  // BCC recipients are never shown to clients.
+  realtime.toTicket(ticket, 'message:new', { ticketId: ticket.id, message: { ...message, bcc: null } }, { internal });
+  if (message.bcc) realtime.toTicket(ticket, 'message:updated', { ticketId: ticket.id, message }, { internal: true });
   return message;
 }
 
@@ -141,10 +168,10 @@ async function createTicket({ actor, companyId, createdBy, subject, body, catego
 
 // Adds a reply and applies the usual side effects: first response, auto-assign, reopen and notifications.
 // Used by the portal and by inbound email.
-async function postReply(t, user, { body, internal = false, files = [] }) {
-  const staff = isStaff(user);
-  const message = await addMessage(t, user, { body, internal, files });
-  await markRead(t, user);
+async function postReply(t, user, { body, internal = false, files = [], cc = [], bcc = [] }) {
+  const staff = !user.external && isStaff(user);
+  const message = await addMessage(t, user, { body, internal, files, cc, bcc });
+  if (!user.external) await markRead(t, user);
 
   const fields = {};
   let newStatus = null;
@@ -164,7 +191,7 @@ async function postReply(t, user, { body, internal = false, files = [] }) {
   const updated = await touch(t.id, fields);
   if (fields.assigned_to) await systemMessage(updated, user, `Picked up by ${user.name}.`);
   if (newStatus) await systemMessage(updated, user, `Status changed from ${STATUS_LABELS[t.status]} to ${STATUS_LABELS[newStatus]}.`);
-  notify.messagePosted(updated, user, message, files.length, staff);
+  notify.messagePosted(updated, user, message, files.length, staff, { files });
   return { message, ticket: updated };
 }
 

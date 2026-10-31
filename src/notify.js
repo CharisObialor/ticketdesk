@@ -1,8 +1,19 @@
 const config = require('./config');
+
+// "45 minutes", "1 hour 30 minutes", "2 days" (matches the portal's wording).
+function visitDuration(min) {
+  if (min >= 1440 && min % 1440 === 0) return min === 10080 ? '1 week' : `${min / 1440} day${min === 1440 ? '' : 's'}`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return [h && `${h} hour${h === 1 ? '' : 's'}`, m && `${m} minute${m === 1 ? '' : 's'}`].filter(Boolean).join(' ') || '0 minutes';
+}
 const db = require('./db');
 const mailer = require('./mailer');
 const inapp = require('./inapp');
-const { replyAddress } = require('./replyto');
+const path = require('path');
+const { replyAddress, ticketReplyAddress, unsubscribeUrl } = require('./replyto');
+const { signatureFor, avatarUrl } = require('./email-template');
+const { uploadsDir } = require('./uploads');
 const { STATUS_LABELS } = require('./util');
 const { STAFF_ROLES } = require('./auth');
 
@@ -65,7 +76,11 @@ async function ticketWatchers(t) {
  * Notifies each recipient once (skipping the actor unless includeActor): an in-app notification always,
  * and an email when they have email notifications on. Ticket emails carry a personal reply-to address.
  */
-function sendEach(recipients, actor, build, { ticketId, includeActor = false, kind = 'ticket', link, email = true } = {}) {
+// Icon shown at the top of each kind of email.
+const KIND_ICON = { ticket_created: 'ticket', reply: 'reply', escalated: 'alert', assigned: 'ticket', rating: 'star', visit: 'calendar', group: 'group' };
+const statusIcon = (status) => (['resolved', 'closed'].includes(status) ? 'check' : status === 'awaiting_client' ? 'clock' : 'ticket');
+
+function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = false, kind = 'ticket', link, email = true } = {}) {
   const seen = new Set();
   for (const r of recipients) {
     if (!r || seen.has(r.id) || (!includeActor && actor && r.id === actor.id)) continue;
@@ -76,7 +91,27 @@ function sendEach(recipients, actor, build, { ticketId, includeActor = false, ki
       .catch((err) => console.error('[notify] in-app failed', err.message));
     if (!email || !Number(r.notify_email)) continue;
     const reply = ticketId ? replyAddress(ticketId, r.id) : null;
-    mailer.send({ to: r.email, subject, ticketId, replyTo: reply || undefined, ...mailer.render({ ...content, replyable: !!reply }) });
+    // Emails an admin triggers go out from their own mailbox (Microsoft 365); replies still come back to the ticket.
+    // Agents and technicians send through the system mailbox.
+    const sender = actor && actor.role === 'admin' ? { name: actor.name, email: actor.email } : undefined;
+    const design = {
+      icon: content.icon || (kind === 'status' && ticket ? statusIcon(ticket.status) : KIND_ICON[kind]),
+      status: ticket ? ticket.status : undefined,
+      // Clients see where their ticket is in the process.
+      showProgress: !!ticket && r.role === 'client',
+      signature: sender ? signatureFor(actor) : undefined,
+      signatureAvatar: sender ? avatarUrl(actor) : undefined,
+      quoteAvatar: avatarUrl(actor),
+    };
+    mailer.send({
+      to: r.email,
+      subject,
+      ticketId,
+      sender,
+      replyTo: reply || undefined,
+      unsubscribeUrl: unsubscribeUrl(r.id),
+      ...mailer.render({ ...design, ...content, replyable: !!reply }),
+    });
   }
 }
 
@@ -131,7 +166,7 @@ module.exports = {
         ctaUrl: ticketUrl(t.id),
         ctaLabel: 'View ticket',
       }),
-      { ticketId: t.id, includeActor: true, kind: 'ticket_created' }
+      { ticket: t, ticketId: t.id, includeActor: true, kind: 'ticket_created' }
     );
 
     sendEach(await staff(), actor, (r) => ({
@@ -147,12 +182,56 @@ module.exports = {
       quoteLabel: 'Description',
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'View ticket',
-    }), { ticketId: t.id, kind: 'ticket_created' });
+    }), { ticket: t, ticketId: t.id, kind: 'ticket_created' });
   },
 
   // Public reply: staff replies go to the requester; client replies go to the assignee (or all staff).
-  async messagePosted(t, actor, message, fileCount, actorIsStaff) {
+  async messagePosted(t, actor, message, fileCount, actorIsStaff, { files = [] } = {}) {
     if (message.is_internal) return; // internal notes never notify the client
+
+    // An admin reply with CC/BCC is a real email: one message from the admin's mailbox to the client and the
+    // extra recipients, with the files attached. Anyone replying to it (CC'd people included) lands on the ticket.
+    if (actorIsStaff && (message.cc || message.bcc)) {
+      const requester = await activeUser(t.created_by);
+      const to = requester && requester.id !== actor.id ? requester.email : (message.cc || [])[0];
+      const cc = (message.cc || []).filter((e) => e !== to);
+      if (requester && requester.id !== actor.id) {
+        inapp
+          .create(requester.id, { kind: 'reply', title: `${actor.name} replied on #${t.id}`, body: excerpt(message.body, 200), link: ticketPath(t.id) })
+          .catch(() => {});
+      }
+      const { html, text } = mailer.render({
+        heading: `Ticket #${t.id}: ${t.subject}`,
+        greeting: requester && to === requester.email ? `Hello ${firstName(requester.name)},` : 'Hello,',
+        paragraphs: String(message.body).split(/\n{2,}/),
+        details: [
+          ['Ticket', `#${t.id}`],
+          ['Company', t.company_name],
+          ['Status', STATUS_LABELS[t.status] || t.status],
+        ],
+        ctaUrl: requester && to === requester.email ? ticketUrl(t.id) : undefined,
+        ctaLabel: 'View ticket',
+        icon: 'reply',
+        status: t.status,
+        signature: signatureFor(actor),
+        signatureAvatar: avatarUrl(actor),
+        replyable: !!ticketReplyAddress(t.id),
+      });
+      mailer.send({
+        to,
+        cc,
+        bcc: message.bcc || [],
+        subject: subjectFor(t),
+        ticketId: t.id,
+        sender: { name: actor.name, email: actor.email },
+        replyTo: ticketReplyAddress(t.id) || undefined,
+        attachments: files.map((f) => ({ filename: f.originalname, path: path.join(uploadsDir, path.basename(f.filename)), contentType: f.mimetype })),
+        html,
+        text,
+      });
+      return;
+    }
+
     const recipients = actorIsStaff ? [await activeUser(t.created_by)] : await ticketWatchers(t);
     const attachments = fileCount ? ` with ${plural(fileCount, 'attachment')}` : '';
     sendEach(recipients, actor, (r) => ({
@@ -164,9 +243,10 @@ module.exports = {
       details: details(t, { internal: !actorIsStaff }),
       quote: excerpt(message.body),
       quoteLabel: 'Message',
+      quoteFrom: actor.name,
       ctaUrl: ticketUrl(t.id),
       ctaLabel: actorIsStaff ? 'View and reply' : 'Reply in portal',
-    }), { ticketId: t.id, kind: 'reply' });
+    }), { ticket: t, ticketId: t.id, kind: 'reply' });
   },
 
   async statusChanged(t, actor, from, to, actorIsStaff, { auto = false } = {}) {
@@ -180,14 +260,16 @@ module.exports = {
         greeting: `Hello ${firstName(r.name)},`,
         intro: auto && to === 'closed' ? `Ticket #${t.id} was closed automatically because it has been resolved for ${config.autoCloseDays} days with no further replies.` : copy.body,
         paragraphs:
-          to === 'resolved' && config.autoCloseDays > 0
-            ? [`If we do not hear from you, the ticket will close automatically in ${plural(config.autoCloseDays, 'day')}.`]
-            : [],
+          to === 'resolved' && Number(t.signoff_required) > 0
+            ? ['Our team will review the resolution before the ticket is closed. If the problem comes back, just reply.']
+            : to === 'resolved' && config.autoCloseDays > 0
+              ? [`If we do not hear from you, the ticket will close automatically in ${plural(config.autoCloseDays, 'day')}.`]
+              : [],
         details: details(t),
         ratingLinks: to === 'resolved' ? ratingLinks(t) : undefined,
         ctaUrl: ticketUrl(t.id),
         ctaLabel: 'View ticket',
-      }), { ticketId: t.id, kind: 'status' });
+      }), { ticket: t, ticketId: t.id, kind: 'status' });
       return;
     }
     const reopened = to === 'open';
@@ -200,7 +282,66 @@ module.exports = {
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'View ticket',
-    }), { ticketId: t.id, kind: 'status' });
+    }), { ticket: t, ticketId: t.id, kind: 'status' });
+  },
+
+  // Sign-off: the other admins are asked to approve a resolved ticket before it can close.
+  async signoffRequested(t, actor, required) {
+    const admins = (await staff({ adminsOnly: true })).filter((a) => !actor || a.id !== actor.id);
+    const lastReply = await db.one(
+      "SELECT m.body, u.name FROM messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.ticket_id = ? AND m.kind = 'message' AND m.is_internal = 0 ORDER BY m.id DESC LIMIT 1",
+      [t.id]
+    );
+    sendEach(admins, actor, (r) => ({
+      subject: `[Ticket #${t.id}] Sign-off needed: ${t.subject}`,
+      heading: 'Sign-off needed',
+      inAppTitle: `Sign-off needed for #${t.id}`,
+      icon: 'check',
+      status: 'resolved',
+      greeting: `Hello ${firstName(r.name)},`,
+      intro: `${actor ? actor.name : 'The client'} marked ticket #${t.id} as resolved. It needs sign-off from ${required === 1 ? 'one admin' : `${required} admins`} before it can close.`,
+      paragraphs: ['Please check the resolution, then approve it or send it back with a reason.'],
+      details: details(t, { internal: true }),
+      quote: lastReply ? excerpt(lastReply.body) : null,
+      quoteLabel: 'Latest message',
+      quoteFrom: lastReply ? lastReply.name : null,
+      ctaUrl: ticketUrl(t.id),
+      ctaLabel: 'Review and sign off',
+    }), { ticket: t, ticketId: t.id, kind: 'signoff' });
+  },
+
+  async signoffRejected(t, actor, reason) {
+    const recipients = [await activeUser(t.signoff_requested_by), await activeUser(t.assigned_to)];
+    sendEach(recipients, actor, (r) => ({
+      subject: `[Ticket #${t.id}] Sent back: ${t.subject}`,
+      heading: 'Resolution sent back',
+      inAppTitle: `#${t.id} sent back by ${actor.name}`,
+      icon: 'alert',
+      greeting: `Hello ${firstName(r.name)},`,
+      intro: `${actor.name} did not sign off ticket #${t.id}, so it is back in progress.`,
+      quote: reason,
+      quoteLabel: 'Reason',
+      quoteFrom: actor.name,
+      details: details(t, { internal: true }),
+      ctaUrl: ticketUrl(t.id),
+      ctaLabel: 'View ticket',
+    }), { ticket: t, ticketId: t.id, kind: 'signoff' });
+  },
+
+  async signoffCompleted(t, approvers) {
+    const recipients = [await activeUser(t.signoff_requested_by), await activeUser(t.assigned_to)];
+    sendEach(recipients, null, (r) => ({
+      subject: `[Ticket #${t.id}] Signed off and closed: ${t.subject}`,
+      heading: 'Ticket signed off and closed',
+      inAppTitle: `#${t.id} signed off and closed`,
+      icon: 'check',
+      status: 'closed',
+      greeting: `Hello ${firstName(r.name)},`,
+      intro: `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now closed.`,
+      details: details(t, { internal: true }),
+      ctaUrl: ticketUrl(t.id),
+      ctaLabel: 'View ticket',
+    }), { ticket: t, ticketId: t.id, kind: 'signoff' });
   },
 
   // Escalation: admins and the assignee are alerted; a client who requested it gets an acknowledgement.
@@ -217,7 +358,7 @@ module.exports = {
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'Review ticket',
-    }), { ticketId: t.id, kind: 'escalated' });
+    }), { ticket: t, ticketId: t.id, kind: 'escalated' });
 
     if (actor && actor.role === 'client') {
       sendEach([await activeUser(actor.id)], actor, (r) => ({
@@ -228,7 +369,7 @@ module.exports = {
         details: details(t),
         ctaUrl: ticketUrl(t.id),
         ctaLabel: 'View ticket',
-      }), { ticketId: t.id, includeActor: true, kind: 'escalated' });
+      }), { ticket: t, ticketId: t.id, includeActor: true, kind: 'escalated' });
     }
   },
 
@@ -242,7 +383,7 @@ module.exports = {
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'Open ticket',
-    }), { ticketId: t.id, kind: 'assigned' });
+    }), { ticket: t, ticketId: t.id, kind: 'assigned' });
   },
 
   // A client rated a ticket: the assignee always hears; admins too when the rating is low.
@@ -252,7 +393,7 @@ module.exports = {
       subject: subjectFor(t),
       heading: `Ticket #${t.id} rated ${rating} out of 5`,
       intro: comment ? `${actor.name}: "${excerpt(comment, 200)}"` : `${actor.name} rated the support on this ticket.`,
-    }), { ticketId: t.id, kind: 'rating', email: false });
+    }), { ticket: t, ticketId: t.id, kind: 'rating', email: false });
   },
 
   // Site visits: the technician and the requester are told when a visit is booked, moved or cancelled.
@@ -261,7 +402,7 @@ module.exports = {
     const rows = [
       ['Ticket', `#${t.id} ${t.subject}`],
       ['Date and time', when],
-      ['Expected duration', `${visit.duration_min} minutes`],
+      ['Expected duration', visitDuration(visit.duration_min)],
       ['Location', visit.location || t.company_name],
       ['Technician', visit.technician_name || 'To be confirmed'],
     ];
@@ -277,7 +418,7 @@ module.exports = {
       quoteLabel: 'Notes',
       ctaUrl: `${config.appUrl}/visits/${visit.id}`,
       ctaLabel: 'Open visit',
-    }), { ticketId: t.id, kind: 'visit', link: `/visits/${visit.id}` });
+    }), { ticket: t, ticketId: t.id, kind: 'visit', link: `/visits/${visit.id}` });
 
     sendEach([await activeUser(t.created_by)], actor, (r) => ({
       subject: subjectFor(t),
@@ -292,7 +433,7 @@ module.exports = {
       paragraphs: change === 'cancelled' ? [] : ['Please make sure someone is available to give access. Reply to this email if the time does not suit you.'],
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'View ticket',
-    }), { ticketId: t.id, kind: 'visit' });
+    }), { ticket: t, ticketId: t.id, kind: 'visit' });
   },
 
   // Someone was added to a group conversation.
@@ -319,6 +460,7 @@ module.exports = {
       ...g.messages.map((m) => `  ${m.user_name || 'Someone'}: ${excerpt(m.body, 160)}`),
     ]);
     const { html, text } = mailer.render({
+      icon: 'mail',
       heading: `You have ${plural(total, 'unread message')}`,
       greeting: `Hello ${firstName(user.name)},`,
       intro: `There ${total === 1 ? 'is' : 'are'} ${plural(total, 'new message')} in your group conversations that you have not read yet.`,
@@ -327,7 +469,31 @@ module.exports = {
       ctaUrl: groups.length === 1 ? `${config.appUrl}/messages/group/${groups[0].id}` : `${config.appUrl}/messages`,
       ctaLabel: 'Read messages',
     });
-    mailer.send({ to: user.email, subject: `${plural(total, 'unread message')} in ${groups.length === 1 ? `"${groups[0].name}"` : `${groups.length} conversations`}`, html, text });
+    mailer.send({ to: user.email, unsubscribeUrl: unsubscribeUrl(user.id), subject: `${plural(total, 'unread message')} in ${groups.length === 1 ? `"${groups[0].name}"` : `${groups.length} conversations`}`, html, text });
+  },
+
+  // Admin actions: urgent items as soon as they appear, and the weekday morning summary.
+  actionsEmail(user, items, { daily = false } = {}) {
+    const label = { urgent: 'Urgent', high: 'High', normal: 'Normal' };
+    const lines = items.slice(0, 25).map((i) => `${label[i.severity]}: ${i.title}\n   ${i.suggestion}`);
+    if (items.length > 25) lines.push(`...and ${items.length - 25} more`);
+    const urgent = items.filter((i) => i.severity === 'urgent').length;
+    const { html, text } = mailer.render({
+      icon: 'list',
+      heading: daily ? `Your actions for today (${items.length})` : urgent === 1 ? 'An urgent item needs your attention' : `${items.length} urgent items need your attention`,
+      greeting: `Good ${daily ? 'morning' : 'day'} ${firstName(user.name)},`,
+      intro: daily
+        ? `Here is what is waiting in the support portal${urgent ? `, including ${plural(urgent, 'urgent item')}` : ''}.`
+        : 'The following needs action now:',
+      quote: lines.join('\n\n'),
+      ctaUrl: `${config.appUrl}/actions`,
+      ctaLabel: 'Open actions',
+      note: 'You can snooze or dismiss items on the Actions page. Email notifications can be turned off on your profile page.',
+    });
+    const subject = daily
+      ? `${items.length} support action${items.length === 1 ? '' : 's'} waiting${urgent ? ` (${urgent} urgent)` : ''}`
+      : `Urgent: ${items[0].title}`.slice(0, 200);
+    mailer.send({ to: user.email, subject, html, text, unsubscribeUrl: unsubscribeUrl(user.id) });
   },
 
   // Account emails are always sent, whatever the notification preference.
@@ -335,6 +501,7 @@ module.exports = {
   invite(user, token) {
     const hasPassword = !!user.password_hash;
     const { html, text } = mailer.render({
+      icon: 'user',
       heading: 'Your account has been created',
       greeting: `Hello ${firstName(user.name)},`,
       intro: `An account has been created for you on the DateHeight support platform. You can use it to raise support requests, follow their progress and chat with our support team.`,
@@ -357,6 +524,7 @@ module.exports = {
 
   passwordReset(user, token) {
     const { html, text } = mailer.render({
+      icon: 'lock',
       heading: 'Reset your password',
       greeting: `Hello ${firstName(user.name)},`,
       intro: 'We received a request to reset the password for your support portal account. Use the button below to choose a new password. This link expires in 1 hour.',
@@ -370,6 +538,7 @@ module.exports = {
 
   passwordChanged(user) {
     const { html, text } = mailer.render({
+      icon: 'lock',
       heading: 'Your password has been changed',
       greeting: `Hello ${firstName(user.name)},`,
       intro: `The password for your support portal account (${user.email}) was changed on ${new Date().toUTCString()}.`,

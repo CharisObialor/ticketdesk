@@ -15,7 +15,7 @@ import { DropZone, FileChips, useFileList } from '@/components/file-attachments'
 import { ScheduleVisitDialog, SignaturePad, VisitStatusBadge, formatVisitTime } from '@/components/visits';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { formatDateTime, parseTs } from '@/lib/format';
+import { formatDateTime, parseTs, visitDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Visit } from '@/lib/types';
 
@@ -181,7 +181,7 @@ export function VisitDetailPage() {
 
       <Card>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Info icon={CalendarClock} label="When" value={`${formatVisitTime(v.scheduled_at)} (${v.duration_min} min)`} />
+          <Info icon={CalendarClock} label="When" value={`${formatVisitTime(v.scheduled_at)} (${visitDuration(v.duration_min)})`} />
           <Info icon={UserRound} label="Technician" value={v.technician_name ?? 'Unassigned'} />
           <Info icon={MapPin} label="Location" value={v.location || v.company_name || '-'} />
           <Info icon={Phone} label="Client contact" value={v.requester_name ?? '-'} />

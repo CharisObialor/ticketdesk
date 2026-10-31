@@ -76,3 +76,15 @@ export const initials = (name: string | null | undefined) =>
     .slice(0, 2)
     .map((p) => p[0]?.toUpperCase())
     .join('');
+
+// Site visit lengths in words: "45 minutes", "1 hour 30 minutes", "2 days".
+export function visitDuration(min: number) {
+  if (min >= 1440 && min % 1440 === 0) return min === 10080 ? '1 week' : `${min / 1440} day${min === 1440 ? '' : 's'}`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  const parts = [h && `${h} hour${h === 1 ? '' : 's'}`, m && `${m} minute${m === 1 ? '' : 's'}`].filter(Boolean);
+  return parts.join(' ') || '0 minutes';
+}
+
+// Choices for a visit's expected length, from a quick check to a week-long installation.
+export const VISIT_DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480, 600, 720, 1440, 2880, 4320, 7200, 10080];
