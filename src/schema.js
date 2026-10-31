@@ -267,6 +267,50 @@ CREATE TABLE IF NOT EXISTS mail_outbox (
   sent_at DATETIME NULL,
   KEY idx_mo_due (status, next_attempt_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS settings (
+  name VARCHAR(64) NOT NULL PRIMARY KEY,
+  value TEXT NULL,
+  updated_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sites (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  company_id INT UNSIGNED NOT NULL,
+  code VARCHAR(60) NOT NULL,
+  location VARCHAR(255) NULL,
+  details TEXT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE KEY uq_site_code (company_id, code),
+  CONSTRAINT fk_sites_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_ratings (
+  ticket_id INT UNSIGNED NOT NULL,
+  admin_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NULL,
+  rating TINYINT NOT NULL,
+  comment TEXT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (ticket_id, admin_id),
+  KEY idx_ar_admin (admin_id, updated_at),
+  KEY idx_ar_updated (updated_at),
+  CONSTRAINT fk_ar_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ar_admin FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS technicians (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  phone VARCHAR(40) NULL,
+  area VARCHAR(190) NULL,
+  notes TEXT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
 const sqlite = `
@@ -383,6 +427,23 @@ CREATE TABLE IF NOT EXISTS mail_outbox (
   last_error TEXT, created_at TEXT NOT NULL, sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mo_due ON mail_outbox(status, next_attempt_at);
+CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  code TEXT NOT NULL, location TEXT, details TEXT, is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (company_id, code)
+);
+CREATE TABLE IF NOT EXISTS admin_ratings (
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE, admin_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, rating INTEGER NOT NULL, comment TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (ticket_id, admin_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ar_admin ON admin_ratings(admin_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_ar_updated ON admin_ratings(updated_at);
+CREATE TABLE IF NOT EXISTS technicians (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT, area TEXT, notes TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 `;
 
 // Columns added after the first release. Each is added once, on startup, if missing:
@@ -397,6 +458,8 @@ const columns = [
   // When the user finished (or skipped) the first-login tour. People who existed before the tour count as done.
   ['companies', 'logo', 'VARCHAR(80) NULL', 'TEXT'],
   ['companies', 'rc_number', 'VARCHAR(40) NULL', 'TEXT'],
+  // Company-specific SLA targets (JSON); anything not set uses the defaults on the System page.
+  ['companies', 'sla', 'TEXT NULL', 'TEXT'],
   // The person's position at their company, e.g. IT Manager (separate from their portal role).
   ['users', 'job_title', 'VARCHAR(120) NULL', 'TEXT'],
   // Sign-off before closing: the current round, how many approvals it needs, and who asked.
@@ -406,9 +469,43 @@ const columns = [
   ['tickets', 'signoff_requested_at', 'DATETIME NULL', 'TEXT'],
   ['users', 'tour_done_at', 'DATETIME NULL', 'TEXT', 'UPDATE users SET tour_done_at = created_at'],
   ['messages', 'cc', 'TEXT NULL', 'TEXT'],
+  // Work updates from the engineer: time spent on the work, and photos marked as before or after.
+  ['messages', 'time_spent_min', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['attachments', 'label', 'VARCHAR(16) NULL', 'TEXT'],
   ['messages', 'bcc', 'TEXT NULL', 'TEXT'],
   ['messages', 'sender_name', 'VARCHAR(190) NULL', 'TEXT'],
   ['messages', 'sender_email', 'VARCHAR(190) NULL', 'TEXT'],
+  // The client's site contacts for a ticket: Operations Manager (OM) and Field Service Engineer (FSE).
+  // Companies that ask clients for the OM and FSE on every new ticket (Pan African Towers).
+  ['companies', 'site_contacts', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['tickets', 'om_name', 'VARCHAR(120) NULL', 'TEXT'],
+  ['tickets', 'om_phone', 'VARCHAR(40) NULL', 'TEXT'],
+  ['tickets', 'fse_name', 'VARCHAR(120) NULL', 'TEXT'],
+  ['tickets', 'fse_phone', 'VARCHAR(40) NULL', 'TEXT'],
+  // When the ticket was first assigned: the SLA clocks start here. Older assigned tickets count from when they were raised.
+  ['tickets', 'assigned_at', 'DATETIME NULL', 'TEXT', 'UPDATE tickets SET assigned_at = created_at WHERE assigned_to IS NOT NULL'],
+  // The client site the ticket is about (from the company's site list).
+  ['tickets', 'site_id', 'INT UNSIGNED NULL', 'INTEGER'],
+  // One-time code emailed to confirm a password change (hash only), when it expires, wrong tries, and when it was sent.
+  ['users', 'otp_hash', 'VARCHAR(64) NULL', 'TEXT'],
+  ['users', 'otp_expires', 'DATETIME NULL', 'TEXT'],
+  ['users', 'otp_attempts', 'INT UNSIGNED NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'otp_sent_at', 'DATETIME NULL', 'TEXT'],
+  // The client confirming the engineer arrived, and signing the job completion certificate (JCC) on screen.
+  ['site_visits', 'client_confirmed_at', 'DATETIME NULL', 'TEXT'],
+  ['site_visits', 'client_confirmed_by', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['site_visits', 'client_signed_at', 'DATETIME NULL', 'TEXT'],
+  ['site_visits', 'client_signed_by', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['site_visits', 'client_signed_name', 'VARCHAR(190) NULL', 'TEXT'],
+  ['site_visits', 'client_satisfied', 'TINYINT NULL', 'INTEGER'],
+  ['site_visits', 'client_comment', 'TEXT NULL', 'TEXT'],
+  // Which notifications a person wants, by email and in the bell (JSON, see notify.js PREF_CATEGORIES).
+  ['users', 'notify_prefs', 'TEXT NULL', 'TEXT'],
+  // Client contacts who get the monthly statement (JSON list of user ids), and the last month sent ("YYYY-MM").
+  ['companies', 'statement_recipients', 'TEXT NULL', 'TEXT'],
+  ['companies', 'statement_sent_for', 'VARCHAR(7) NULL', 'TEXT'],
+  // How often an admin wants SLA reminders (JSON, see sla.reminderPrefs).
+  ['users', 'sla_reminders', 'TEXT NULL', 'TEXT'],
 ];
 
 // Indexes added after the first release, created once on startup if missing: [table, index name, columns].
@@ -427,6 +524,10 @@ const indexes = [
   ['chat_groups', 'idx_cg_last', 'last_message_at'],
   // Sidebar counts and team workload, answered from the index alone.
   ['tickets', 'idx_t_status_assigned', 'status, assigned_to, escalated'],
+  // Clearing out sent mail older than a week without reading every stored email.
+  ['mail_outbox', 'idx_mo_sent', 'status, sent_at'],
+  // Tickets per site, for the company site list.
+  ['tickets', 'idx_t_site', 'site_id'],
 ];
 
 module.exports = { mysql, sqlite, columns, indexes };

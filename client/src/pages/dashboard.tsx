@@ -284,6 +284,25 @@ function SatisfactionCard({ metrics: m }: { metrics: Metrics }) {
           </>
         )}
       </CardContent>
+      {!!m.adminRatings?.length && (
+        <CardContent className="space-y-2 border-t pt-4">
+          <div className="text-sm font-medium">Ratings for our admins</div>
+          <p className="text-xs text-muted-foreground">How clients rated each admin's handling of their jobs in this period.</p>
+          <ul className="divide-y rounded-md border">
+            {m.adminRatings.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate font-medium">{a.name}</span>
+                <Stars value={a.avgRating} size="size-3.5" />
+                <span className="w-8 text-right tabular-nums">{a.avgRating.toFixed(1)}</span>
+                <span className="w-24 text-right text-xs text-muted-foreground">
+                  {a.ratings} rating{a.ratings === 1 ? '' : 's'}
+                  {a.low > 0 && <span className="text-destructive">, {a.low} low</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      )}
     </Card>
   );
 }

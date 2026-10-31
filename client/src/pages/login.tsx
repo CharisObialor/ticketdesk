@@ -13,6 +13,7 @@ import { passwordOk } from '@/lib/password';
 import { FullPageLoader } from '@/components/app-layout';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
+import { urlKeyInPath } from '@/lib/url-key';
 
 type Mode = 'signin' | 'forgot' | 'sent' | 'token';
 
@@ -176,6 +177,8 @@ function SignInForm({ onForgot }: { onForgot: () => void }) {
     try {
       await api.post('/auth/login', { email, password });
       await qc.invalidateQueries({ queryKey: ['me'] });
+      // The session moves the address onto this sign-in's key (see use-session); this covers the same key.
+      if (!urlKeyInPath) return;
       navigate(safeNext(params.get('next')), { replace: true });
     } catch (err) {
       setError(errorMessage(err));

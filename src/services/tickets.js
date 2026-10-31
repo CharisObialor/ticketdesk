@@ -9,11 +9,12 @@ const { isStaff } = require('../auth');
 const { now, STATUS_LABELS } = require('../util');
 
 const TICKET_SELECT = `SELECT t.*, c.name AS company_name, cu.name AS creator_name, cu.email AS creator_email,
-  au.name AS assignee_name
+  au.name AS assignee_name, s.code AS site_code, s.location AS site_location
   FROM tickets t
   JOIN companies c ON c.id = t.company_id
   LEFT JOIN users cu ON cu.id = t.created_by
-  LEFT JOIN users au ON au.id = t.assigned_to`;
+  LEFT JOIN users au ON au.id = t.assigned_to
+  LEFT JOIN sites s ON s.id = t.site_id`;
 
 const getTicket = (id) => db.one(`${TICKET_SELECT} WHERE t.id = ?`, [id]);
 
@@ -24,7 +25,7 @@ async function getMessages(ticketId, includeInternal) {
     [ticketId]
   );
   const atts = await db.query(
-    'SELECT id, message_id, original_name, mime, size, created_at FROM attachments WHERE ticket_id = ? ORDER BY id',
+    'SELECT id, message_id, original_name, mime, size, label, created_at FROM attachments WHERE ticket_id = ? ORDER BY id',
     [ticketId]
   );
   const byMessage = new Map();
@@ -43,13 +44,14 @@ async function getMessages(ticketId, includeInternal) {
 
 // `user` is a portal user, or { external: true, name, email } for someone replying by email from outside the portal
 // (a person an admin CC'd). `cc`/`bcc` are the extra recipients an admin added to a reply.
-async function addMessage(ticket, user, { body, internal = false, kind = 'message', files = [], cc = [], bcc = [] }) {
+// A work update (kind 'work_update') can carry the time spent, and its files can be labelled 'before' or 'after'.
+async function addMessage(ticket, user, { body, internal = false, kind = 'message', files = [], cc = [], bcc = [], timeSpent = null }) {
   const ts = now();
   const external = !!(user && user.external);
   const userId = user && !external ? user.id : null;
   const r = await db.query(
-    `INSERT INTO messages (ticket_id, user_id, body, is_internal, kind, created_at, cc, bcc, sender_name, sender_email)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (ticket_id, user_id, body, is_internal, kind, created_at, cc, bcc, sender_name, sender_email, time_spent_min)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       ticket.id,
       userId,
@@ -61,16 +63,17 @@ async function addMessage(ticket, user, { body, internal = false, kind = 'messag
       bcc.length ? JSON.stringify(bcc) : null,
       external ? user.name : null,
       external ? user.email : null,
+      timeSpent,
     ]
   );
   const attachments = [];
   for (const f of files) {
     const a = await db.query(
-      `INSERT INTO attachments (ticket_id, message_id, user_id, original_name, stored_name, mime, size, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ticket.id, r.insertId, userId, f.originalname, f.filename, f.mimetype, f.size, ts]
+      `INSERT INTO attachments (ticket_id, message_id, user_id, original_name, stored_name, mime, size, label, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [ticket.id, r.insertId, userId, f.originalname, f.filename, f.mimetype, f.size, f.label || null, ts]
     );
-    attachments.push({ id: a.insertId, message_id: r.insertId, original_name: f.originalname, mime: f.mimetype, size: f.size, created_at: ts });
+    attachments.push({ id: a.insertId, message_id: r.insertId, original_name: f.originalname, mime: f.mimetype, size: f.size, label: f.label || null, created_at: ts });
   }
   const message = {
     id: r.insertId,
@@ -85,6 +88,7 @@ async function addMessage(ticket, user, { body, internal = false, kind = 'messag
     kind,
     cc: cc.length ? cc : null,
     bcc: bcc.length ? bcc : null,
+    time_spent_min: timeSpent,
     created_at: ts,
     attachments,
   };
@@ -95,27 +99,53 @@ async function addMessage(ticket, user, { body, internal = false, kind = 'messag
 }
 
 const systemMessage = (ticket, actor, text) => addMessage(ticket, actor, { body: text, kind: 'system' });
+// How the team works a ticket (assignment, priority, escalation) is for staff only; clients see status changes.
+const teamNote = (ticket, actor, text) => addMessage(ticket, actor, { body: text, kind: 'system', internal: true });
 
 // Updates ticket columns (names come from code, never from input), bumps activity and broadcasts.
 async function touch(id, fields = {}) {
   const ts = now();
   const sets = { ...fields, updated_at: ts, last_activity_at: ts };
   const keys = Object.keys(sets);
-  await db.query(`UPDATE tickets SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map((k) => sets[k]), id]);
+  // The SLA clocks start the first time the ticket is assigned (reassigning does not restart them).
+  const startClock = fields.assigned_to ? ', assigned_at = COALESCE(assigned_at, ?)' : '';
+  await db.query(`UPDATE tickets SET ${keys.map((k) => `${k} = ?`).join(', ')}${startClock} WHERE id = ?`, [
+    ...keys.map((k) => sets[k]),
+    ...(startClock ? [ts] : []),
+    id,
+  ]);
   const t = await getTicket(id);
   realtime.toTicket(t, 'ticket:update', { ticket: t });
   return t;
 }
 
-async function escalate(ticket, actor, reason) {
-  const t = await touch(ticket.id, {
+// Raises the escalation level (one step, or straight to a rule's level) and alerts people. An escalation rule can
+// also raise the priority and assign a ticket nobody has picked up.
+const PRIORITY_RANK = { low: 0, normal: 1, high: 2, urgent: 3 };
+async function escalate(ticket, actor, reason, { level = null, rule = null } = {}) {
+  const fields = {
     escalated: 1,
-    escalation_level: Number(ticket.escalation_level) + 1,
+    escalation_level: level || Number(ticket.escalation_level) + 1,
     escalated_at: now(),
-  });
-  await systemMessage(t, actor, `Escalated to level ${t.escalation_level}. ${reason}`);
+  };
+  const changes = [];
+  if (rule && rule.set_priority && PRIORITY_RANK[rule.set_priority] > PRIORITY_RANK[ticket.priority]) {
+    fields.priority = rule.set_priority;
+    changes.push(`Priority raised to ${rule.set_priority}.`);
+  }
+  let assignee = null;
+  if (rule && rule.assign_to && !ticket.assigned_to) {
+    assignee = await db.one("SELECT id, name FROM users WHERE id = ? AND role IN ('admin', 'agent', 'technician') AND is_active = 1", [rule.assign_to]);
+    if (assignee) {
+      fields.assigned_to = assignee.id;
+      changes.push(`Assigned to ${assignee.name}.`);
+    }
+  }
+  const t = await touch(ticket.id, fields);
+  await teamNote(t, actor, [`Escalated to level ${t.escalation_level}. ${reason}`, ...changes].join(' '));
   realtime.toTicket(t, 'ticket:escalated', { ticket: t }, { internal: true });
-  notify.escalated(t, actor, reason);
+  notify.escalated(t, actor, reason, rule);
+  if (assignee) notify.assigned(t, { id: 0, name: 'An escalation rule', role: 'system' });
   return t;
 }
 
@@ -151,13 +181,15 @@ const getReads = (ticketId) =>
   );
 
 // Creates a ticket with its first message. Used by the portal and by inbound email.
-async function createTicket({ actor, companyId, createdBy, subject, body, category = 'General', priority = 'normal', files = [] }) {
+async function createTicket({ actor, companyId, createdBy, subject, body, category = 'General', priority = 'normal', contacts = {}, siteId = null, files = [] }) {
   const staff = isStaff(actor);
   const ts = now();
+  const c = (k) => contacts[k] || null;
   const r = await db.query(
-    `INSERT INTO tickets (company_id, created_by, subject, category, priority, status, first_response_at, created_at, updated_at, last_activity_at)
-     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
-    [companyId, createdBy, subject, category, priority, staff ? ts : null, ts, ts, ts]
+    `INSERT INTO tickets (company_id, created_by, subject, category, priority, status, first_response_at, created_at, updated_at, last_activity_at,
+       om_name, om_phone, fse_name, fse_phone, site_id)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [companyId, createdBy, subject, category, priority, staff ? ts : null, ts, ts, ts, c('om_name'), c('om_phone'), c('fse_name'), c('fse_phone'), siteId]
   );
   const t = await getTicket(r.insertId);
   await addMessage(t, actor, { body, files });
@@ -168,9 +200,9 @@ async function createTicket({ actor, companyId, createdBy, subject, body, catego
 
 // Adds a reply and applies the usual side effects: first response, auto-assign, reopen and notifications.
 // Used by the portal and by inbound email.
-async function postReply(t, user, { body, internal = false, files = [], cc = [], bcc = [] }) {
+async function postReply(t, user, { body, internal = false, files = [], cc = [], bcc = [], kind = 'message', timeSpent = null }) {
   const staff = !user.external && isStaff(user);
-  const message = await addMessage(t, user, { body, internal, files, cc, bcc });
+  const message = await addMessage(t, user, { body, internal, files, cc, bcc, kind, timeSpent });
   if (!user.external) await markRead(t, user);
 
   const fields = {};
@@ -189,13 +221,14 @@ async function postReply(t, user, { body, internal = false, files = [], cc = [],
     fields.resolved_at = null;
   }
   const updated = await touch(t.id, fields);
-  if (fields.assigned_to) await systemMessage(updated, user, `Picked up by ${user.name}.`);
+  if (fields.assigned_to) await teamNote(updated, user, `Picked up by ${user.name}.`);
   if (newStatus) await systemMessage(updated, user, `Status changed from ${STATUS_LABELS[t.status]} to ${STATUS_LABELS[newStatus]}.`);
   notify.messagePosted(updated, user, message, files.length, staff, { files });
   return { message, ticket: updated };
 }
 
 module.exports = {
+  teamNote,
   TICKET_SELECT,
   getTicket,
   getMessages,

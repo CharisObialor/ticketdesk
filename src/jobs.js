@@ -1,4 +1,5 @@
 const config = require('./config');
+const sla = require('./sla');
 const db = require('./db');
 const tickets = require('./services/tickets');
 const notify = require('./notify');
@@ -6,23 +7,10 @@ const backup = require('./backup');
 const inbound = require('./inbound');
 const { now, parseTs } = require('./util');
 
-const human = (min) => (min % 1440 === 0 ? `${min / 1440}d` : min % 60 === 0 ? `${min / 60}h` : `${min}m`);
 const minutesAgo = (min) => now(new Date(Date.now() - min * 60000));
 
-// Auto-escalate tickets that have waited longer than their priority's SLA for a first staff response.
-// Only tickets never escalated before are considered, so a manual de-escalation sticks.
-async function checkSla() {
-  const rows = await db.query(
-    `SELECT id, priority, created_at FROM tickets
-     WHERE escalation_level = 0 AND first_response_at IS NULL AND status IN ('open', 'in_progress')`
-  );
-  for (const r of rows) {
-    const limit = config.slaMinutes[r.priority] || config.slaMinutes.normal;
-    if (Date.now() - parseTs(r.created_at).getTime() < limit * 60000) continue;
-    const t = await tickets.getTicket(r.id);
-    await tickets.escalate(t, null, `Auto-escalated: no staff response within the ${human(limit)} SLA for ${r.priority} priority.`);
-  }
-}
+// Auto-escalation follows the rules admins set on the System page (see escalation.js).
+const checkSla = () => require('./escalation').run();
 
 // Closes tickets that have stayed resolved, with no further activity, for AUTO_CLOSE_DAYS.
 async function autoClose() {
@@ -49,7 +37,7 @@ async function chatDigest() {
   const unread = `FROM chat_messages cm WHERE cm.group_id = m.group_id AND cm.kind = 'message' AND cm.user_id <> m.user_id
     AND cm.id > m.last_read_id AND cm.id > m.last_emailed_id`;
   const rows = await db.query(
-    `SELECT m.group_id, m.user_id, g.name AS group_name, c.name AS company_name, u.name AS user_name, u.email,
+    `SELECT m.group_id, m.user_id, g.name AS group_name, c.name AS company_name, u.name AS user_name, u.email, u.notify_prefs,
        (SELECT MIN(cm.created_at) ${unread}) AS oldest,
        (SELECT COUNT(*) ${unread}) AS cnt,
        (SELECT MAX(cm.id) ${unread}) AS max_id
@@ -63,7 +51,7 @@ async function chatDigest() {
   const due = rows.filter((r) => Number(r.cnt) > 0 && r.oldest && r.oldest <= cutoff);
   const byUser = new Map();
   for (const r of due) {
-    if (!byUser.has(r.user_id)) byUser.set(r.user_id, { user: { id: r.user_id, name: r.user_name, email: r.email }, groups: [] });
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, { user: { id: r.user_id, name: r.user_name, email: r.email, notify_prefs: r.notify_prefs }, groups: [] });
     const messages = await db.query(
       `SELECT cm.body, u.name AS user_name FROM chat_messages cm LEFT JOIN users u ON u.id = cm.user_id
        WHERE cm.group_id = ? AND cm.kind = 'message' AND cm.user_id <> ? AND cm.id <= ? ORDER BY cm.id DESC LIMIT 3`,
@@ -83,7 +71,7 @@ const REMIND_AFTER_MIN = { urgent: 30, high: 120, normal: 480 };
 async function actionReminders() {
   const actions = require('./actions');
   const inapp = require('./inapp');
-  const admins = await db.query("SELECT id, name, email, notify_email FROM users WHERE role = 'admin' AND is_active = 1");
+  const admins = await db.query("SELECT id, name, email, notify_email, sla_reminders FROM users WHERE role = 'admin' AND is_active = 1");
   if (!admins.length) return;
   const items = await actions.computeActions();
   const ts = now();
@@ -107,7 +95,7 @@ async function actionReminders() {
     }
 
     // Urgent: tell them straight away (bell for each, one email for the batch).
-    const newUrgent = visible.filter((i) => i.severity === 'urgent' && !states.get(i.key).urgent_emailed_at);
+    const newUrgent = visible.filter((i) => !i.slaKind && i.severity === 'urgent' && !states.get(i.key).urgent_emailed_at);
     for (const i of newUrgent) {
       inapp.create(admin.id, { kind: 'action', title: `Urgent: ${i.title}`, body: i.suggestion, link: i.link }).catch(() => {});
       await db.query('UPDATE action_states SET urgent_emailed_at = ? WHERE user_id = ? AND action_key = ?', [ts, admin.id, i.key]);
@@ -119,7 +107,7 @@ async function actionReminders() {
       const s = states.get(i.key);
       const waited = (Date.now() - parseTs(s.first_seen_at).getTime()) / 60000;
       const sinceReminder = s.reminded_at ? (Date.now() - parseTs(s.reminded_at).getTime()) / 60000 : Infinity;
-      return waited >= REMIND_AFTER_MIN[i.severity] && sinceReminder >= 1440 && !newUrgent.includes(i);
+      return !i.slaKind && waited >= REMIND_AFTER_MIN[i.severity] && sinceReminder >= 1440 && !newUrgent.includes(i);
     });
     if (due.length) {
       inapp
@@ -131,6 +119,31 @@ async function actionReminders() {
         })
         .catch(() => {});
       for (const i of due) await db.query('UPDATE action_states SET reminded_at = ? WHERE user_id = ? AND action_key = ?', [ts, admin.id, i.key]);
+    }
+
+    // SLA deadlines: each admin chooses on their Profile page how often to hear about each kind of breach.
+    const prefs = sla.reminderPrefs(admin.sla_reminders);
+    const slaDue = visible.filter((i) => {
+      const every = i.slaKind && prefs[i.slaKind];
+      if (!every) return false;
+      const last = states.get(i.key).reminded_at;
+      return !last || (Date.now() - parseTs(last).getTime()) / 60000 >= every - 1;
+    });
+    if (slaDue.length) {
+      const first = slaDue.filter((i) => !states.get(i.key).reminded_at);
+      const one = slaDue[0];
+      inapp
+        .create(admin.id, {
+          kind: 'action',
+          title: slaDue.length === 1 ? `${first.length ? 'SLA' : 'Reminder'}: ${one.title}` : `SLA: ${slaDue.length} deadlines need attention`,
+          body: slaDue.length === 1 ? one.suggestion : slaDue.slice(0, 3).map((i) => i.title).join(' · '),
+          link: slaDue.length === 1 ? one.link : '/actions',
+        })
+        .catch(() => {});
+      // Email: every reminder if the admin asked for it; otherwise only the first notice of an urgent item, as before.
+      const emailNow = prefs.email ? slaDue : config.actions.urgentEmails ? first.filter((i) => i.severity === 'urgent') : [];
+      if (emailNow.length && Number(admin.notify_email)) notify.actionsEmail(admin, emailNow);
+      for (const i of slaDue) await db.query('UPDATE action_states SET reminded_at = ?, urgent_emailed_at = COALESCE(urgent_emailed_at, ?) WHERE user_id = ? AND action_key = ?', [ts, ts, admin.id, i.key]);
     }
 
     // Weekday morning summary (once per day, after ACTIONS_DAILY_HOUR in the company time zone).
@@ -154,6 +167,7 @@ function start() {
   every(30 * 60000, 'auto-close', autoClose, 30000);
   every(2 * 60000, 'chat summary', chatDigest, 45000);
   every(10 * 60000, 'backup', backup.runIfDue, 60000);
+  every(60 * 60000, 'monthly statements', require('./statement').runIfDue, 120000);
   every(5 * 60000, 'action reminders', actionReminders, 90000);
   every(30000, 'outbox', require('./mailer').processOutbox, 5000);
   every(6 * 3600e3, 'database statistics', db.optimize, 3600e3);

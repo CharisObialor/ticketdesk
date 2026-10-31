@@ -4,7 +4,6 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import {
   ChevronLeft,
   ChevronRight,
-  CircleCheck,
   CircleDot,
   ExternalLink,
   Flag,
@@ -29,6 +28,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -36,11 +36,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, Greeting, PageHeader } from '@/components/common';
-import { EscalatedBadge, PriorityBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
+import { EscalatedBadge, PriorityBadge, ResolutionBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage, qs } from '@/lib/api';
-import { OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo } from '@/lib/format';
+import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo } from '@/lib/format';
 import type { Company, Priority, Status, Ticket } from '@/lib/types';
+import { basename } from '@/lib/url-key';
 
 const VIEW_TITLES: Record<string, { staff: [string, string]; client: [string, string] }> = {
   open: {
@@ -95,6 +96,8 @@ export default function TicketsPage() {
   const status = params.get('status') || '';
   const companyId = params.get('company_id') || '';
   const q = params.get('q') || '';
+  const siteId = params.get('site_id') || '';
+  const siteLabel = params.get('site') || '';
   const [search, setSearch] = useState(q);
 
   useEffect(() => setSearch(q), [q]);
@@ -117,8 +120,8 @@ export default function TicketsPage() {
   }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tickets = useQuery({
-    queryKey: ['tickets', { view, page, priority, status, companyId, q }],
-    queryFn: () => api.get<{ tickets: Ticket[]; hasMore: boolean; page: number }>(`/tickets${qs({ view, page, priority, status, company_id: companyId, q })}`),
+    queryKey: ['tickets', { view, page, priority, status, companyId, q, siteId }],
+    queryFn: () => api.get<{ tickets: Ticket[]; hasMore: boolean; page: number }>(`/tickets${qs({ view, page, priority, status, company_id: companyId, q, site_id: siteId })}`),
     placeholderData: keepPreviousData,
   });
   const companies = useQuery({
@@ -148,6 +151,17 @@ export default function TicketsPage() {
           </Button>
         }
       />
+
+      {siteId && (
+        <div className="flex items-center gap-2 text-sm">
+          <Badge variant="secondary" className="gap-1.5">
+            Site: {siteLabel || `#${siteId}`}
+            <button type="button" aria-label="Show all sites" className="rounded-sm hover:text-foreground" onClick={() => update({ site_id: '', site: '' })}>
+              <X className="size-3" />
+            </button>
+          </Badge>
+        </div>
+      )}
 
       <div className="flex flex-col gap-2 md:flex-row md:items-center">
         <div className="relative md:max-w-xs md:flex-1">
@@ -242,6 +256,7 @@ export default function TicketsPage() {
                 <TableHead className="w-36">Status</TableHead>
                 <TableHead className="w-28">Priority</TableHead>
                 {view !== 'resolved' && <TableHead className="hidden w-32 sm:table-cell">Response SLA</TableHead>}
+                <TableHead className="hidden w-32 md:table-cell">Resolution SLA</TableHead>
                 {isStaff && <TableHead className="hidden w-40 lg:table-cell">Assignee</TableHead>}
                 <TableHead className="hidden w-32 pr-4 text-right md:table-cell">Last activity</TableHead>
               </TableRow>
@@ -276,6 +291,9 @@ export default function TicketsPage() {
                           <SlaBadge ticket={t} />
                         </TableCell>
                       )}
+                      <TableCell className="hidden md:table-cell">
+                        <ResolutionBadge ticket={t} />
+                      </TableCell>
                       {isStaff && (
                         <TableCell className="hidden truncate text-sm lg:table-cell">
                           {t.assignee_name ?? <span className="text-muted-foreground">Unassigned</span>}
@@ -291,7 +309,7 @@ export default function TicketsPage() {
                       <TicketIcon />
                       Open ticket
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => window.open(`/tickets/${t.id}`, '_blank', 'noopener')}>
+                    <ContextMenuItem onClick={() => window.open(`${basename ?? ''}/tickets/${t.id}`, '_blank', 'noopener')}>
                       <ExternalLink />
                       Open in new tab
                     </ContextMenuItem>
@@ -343,15 +361,6 @@ export default function TicketsPage() {
                               ))}
                           </ContextMenuSubContent>
                         </ContextMenuSub>
-                      </>
-                    )}
-                    {!isStaff && OPEN_STATUSES.includes(t.status) && (
-                      <>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem onClick={() => change(t, { status: 'resolved' }, `#${t.id} marked as resolved`)}>
-                          <CircleCheck />
-                          Mark as resolved
-                        </ContextMenuItem>
                       </>
                     )}
                   </ContextMenuContent>

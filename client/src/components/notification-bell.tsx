@@ -32,6 +32,7 @@ const ICONS: Record<string, LucideIcon> = {
   reply: MessageSquare,
   status: CircleCheck,
   escalated: TriangleAlert,
+  escalation_request: TriangleAlert,
   assigned: UserCheck,
   rating: Star,
   visit: CalendarClock,

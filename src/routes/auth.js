@@ -6,9 +6,10 @@ const config = require('../config');
 const db = require('../db');
 const notify = require('../notify');
 const { checkPassword } = require('../password');
-const { setSession, clearSession, requireAuth, publicUser, makeToken, sha256, isStaff } = require('../auth');
+const { setSession, clearSession, requireAuth, publicUser, makeToken, sha256, isStaff, urlKeyFor } = require('../auth');
 const { escapeHtml } = require('../util');
-const { wrap, now, HttpError, STATUSES, STATUS_LABELS, PRIORITIES, CATEGORIES } = require('../util');
+const crypto = require('crypto');
+const { wrap, now, parseTs, HttpError, STATUSES, STATUS_LABELS, PRIORITIES, CATEGORIES } = require('../util');
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -92,30 +93,47 @@ router.get(
 );
 
 // One-click unsubscribe from notification emails (link in every notification and the List-Unsubscribe header).
-// POST is what mail providers send for one-click; GET shows a confirmation for people who click the link.
-async function unsubscribe(req) {
+// The link carries its own signed token. Opening it only shows a confirmation page, because email security scanners
+// open links automatically; the change happens on POST: the page's button, or a mail app's one-click unsubscribe.
+function unsubscribeLink(req) {
   const { checkUnsubscribe } = require('../replyto');
   const u = Number(req.query.u);
-  if (!checkUnsubscribe(u, String(req.query.t || ''))) throw new HttpError(400, 'This link is not valid.');
-  await db.query('UPDATE users SET notify_email = 0 WHERE id = ?', [u]);
+  const t = String(req.query.t || '');
+  if (!checkUnsubscribe(u, t)) throw new HttpError(400, 'This link is not valid.');
+  return { u, t };
 }
+const unsubscribePage = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>
+<body style="margin:0;background:#f3f4f6;font-family:Inter,'Segoe UI',Roboto,Arial,sans-serif"><div style="max-width:440px;margin:60px auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:32px;text-align:center">
+<h1 style="margin:0 0 12px;font-size:22px;color:#111827">${escapeHtml(title)}</h1>${body}</div></body></html>`;
+
 router.post(
   '/unsubscribe',
   wrap(async (req, res) => {
-    await unsubscribe(req);
-    res.json({ ok: true });
+    const { u } = unsubscribeLink(req);
+    await db.query('UPDATE users SET notify_email = 0 WHERE id = ?', [u]);
+    // Mail apps' one-click unsubscribe expects a plain reply; the confirmation page's button gets a page.
+    if (!req.accepts('html')) return res.json({ ok: true });
+    res.type('html').send(
+      unsubscribePage(
+        'You are unsubscribed',
+        `<p style="margin:0 0 20px;font-size:15px;line-height:24px;color:#374151">You will no longer receive notification emails from ${escapeHtml(config.appName)}. Account and security emails are still sent.</p>
+<p style="margin:0;font-size:14px;color:#6b7280">Changed your mind? Turn notifications back on from your profile in the <a href="${escapeHtml(config.appUrl)}/profile" style="color:#336cb5">support portal</a>.</p>`
+      )
+    );
   })
 );
 router.get(
   '/unsubscribe',
   wrap(async (req, res) => {
-    await unsubscribe(req);
-    res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unsubscribed</title></head>
-<body style="margin:0;background:#f3f4f6;font-family:Inter,'Segoe UI',Roboto,Arial,sans-serif"><div style="max-width:440px;margin:60px auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:32px;text-align:center">
-<h1 style="margin:0 0 12px;font-size:22px;color:#111827">You are unsubscribed</h1>
-<p style="margin:0 0 20px;font-size:15px;line-height:24px;color:#374151">You will no longer receive notification emails from ${escapeHtml(config.appName)}. Account and security emails are still sent.</p>
-<p style="margin:0;font-size:14px;color:#6b7280">Changed your mind? Turn notifications back on from your profile in the <a href="${escapeHtml(config.appUrl)}/profile" style="color:#336cb5">support portal</a>.</p>
-</div></body></html>`);
+    const { u, t } = unsubscribeLink(req);
+    const action = `/api/auth/unsubscribe?u=${encodeURIComponent(u)}&t=${encodeURIComponent(t)}`;
+    res.type('html').send(
+      unsubscribePage(
+        'Stop notification emails?',
+        `<p style="margin:0 0 20px;font-size:15px;line-height:24px;color:#374151">You will stop receiving notification emails from ${escapeHtml(config.appName)}. Account and security emails are still sent.</p>
+<form method="post" action="${escapeHtml(action)}" style="margin:0"><button type="submit" style="background:#336cb5;color:#fff;border:0;border-radius:8px;padding:10px 20px;font-size:15px;cursor:pointer">Unsubscribe</button></form>`
+      )
+    );
   })
 );
 
@@ -129,16 +147,22 @@ router.get(
   requireAuth,
   wrap(async (req, res) => {
     res.json({
+      // The key for page addresses (/<key>/...), for this sign-in.
+      urlKey: urlKeyFor(req.session),
       user: publicUser(req.user),
       app: {
         name: config.appName,
         company: config.companyName,
         statuses: STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
         priorities: PRIORITIES,
-        categories: CATEGORIES,
+        categories: req.user.role === 'client' ? require('../sla').categoryNames(req.user.company_id) : CATEGORIES,
         upload: config.upload,
         mailUpload: config.mailUpload,
-        slaMinutes: config.slaMinutes,
+        workUpload: config.workUpload,
+        // Response and resolution targets, per company where a company has its own.
+        sla: require('../sla').forUser(req.user),
+        // Clients of companies that ask for the site's OM and FSE on each new ticket.
+        siteContacts: req.user.role === 'client' && !!Number(req.user.company_site_contacts),
         autoCloseDays: config.autoCloseDays,
         replyByEmail: config.inbound.enabled,
         sessionIdleMinutes: config.sessionIdleMinutes,
@@ -164,8 +188,57 @@ router.patch(
       req.user.role === 'admin' && req.body.signature !== undefined
         ? String(req.body.signature || '').replace(/\r\n/g, '\n').trim().slice(0, 1000) || null
         : req.user.signature || null;
-    await db.query('UPDATE users SET name = ?, phone = ?, job_title = ?, notify_email = ?, signature = ? WHERE id = ?', [name, phone, jobTitle, notifyEmail, signature, req.user.id]);
-    res.json({ user: publicUser({ ...req.user, name, phone, job_title: jobTitle, notify_email: notifyEmail, signature }) });
+    // Which notifications they want, by email and in the bell: { category: { email, inapp } }.
+    const CATEGORIES_ALLOWED = ['created', 'replies', 'status', 'visits', 'chats', 'assignments', 'escalations', 'ratings', 'signoffs'];
+    let notifyPrefs = req.user.notify_prefs || null;
+    if (req.body.notify_prefs && typeof req.body.notify_prefs === 'object') {
+      const out = {};
+      for (const c of CATEGORIES_ALLOWED) {
+        const v = req.body.notify_prefs[c];
+        if (v && typeof v === 'object') out[c] = { email: v.email !== false, inapp: v.inapp !== false };
+      }
+      notifyPrefs = JSON.stringify(out);
+    }
+    // Admins choose how often they hear about SLA deadlines.
+    const slaReminders =
+      req.user.role === 'admin' && req.body.sla_reminders !== undefined
+        ? JSON.stringify(require('../sla').reminderPrefs(req.body.sla_reminders))
+        : req.user.sla_reminders || null;
+    await db.query('UPDATE users SET name = ?, phone = ?, job_title = ?, notify_email = ?, signature = ?, sla_reminders = ?, notify_prefs = ? WHERE id = ?', [
+      name,
+      phone,
+      jobTitle,
+      notifyEmail,
+      signature,
+      slaReminders,
+      notifyPrefs,
+      req.user.id,
+    ]);
+    res.json({ user: publicUser({ ...req.user, name, phone, job_title: jobTitle, notify_email: notifyEmail, signature, sla_reminders: slaReminders, notify_prefs: notifyPrefs }) });
+  })
+);
+
+// One-time code for changing the password: 6 digits, emailed, valid for 10 minutes and 5 tries, one per minute.
+const OTP_MINUTES = 10;
+const OTP_TRIES = 5;
+router.post(
+  '/password/code',
+  requireAuth,
+  limiter,
+  wrap(async (req, res) => {
+    const u = await db.one('SELECT otp_sent_at FROM users WHERE id = ?', [req.user.id]);
+    if (u && u.otp_sent_at && Date.now() - parseTs(u.otp_sent_at).getTime() < 60e3) {
+      throw new HttpError(429, 'A code was sent less than a minute ago. Check your email, or try again shortly.');
+    }
+    const code = String(crypto.randomInt(0, 1e6)).padStart(6, '0');
+    await db.query('UPDATE users SET otp_hash = ?, otp_expires = ?, otp_attempts = 0, otp_sent_at = ? WHERE id = ?', [
+      sha256(code),
+      now(new Date(Date.now() + OTP_MINUTES * 60e3)),
+      now(),
+      req.user.id,
+    ]);
+    notify.passwordCode(req.user, code, OTP_MINUTES);
+    res.json({ ok: true, minutes: OTP_MINUTES, email: req.user.email });
   })
 );
 
@@ -174,13 +247,22 @@ router.post(
   requireAuth,
   limiter,
   wrap(async (req, res) => {
-    const { current, password } = req.body;
-    if (!req.user.password_hash || !(await hasher.compare(String(current || ''), req.user.password_hash))) {
-      throw new HttpError(400, 'Current password is incorrect');
+    // Confirmed with the one-time code emailed to the account (see /password/code), not the old password.
+    const { code, password } = req.body;
+    const u = await db.one('SELECT otp_hash, otp_expires, otp_attempts FROM users WHERE id = ?', [req.user.id]);
+    if (!u || !u.otp_hash || !u.otp_expires || parseTs(u.otp_expires).getTime() < Date.now()) {
+      throw new HttpError(400, 'The code has expired. Request a new one.');
+    }
+    if (Number(u.otp_attempts) >= OTP_TRIES) throw new HttpError(400, 'Too many wrong codes. Request a new one.');
+    const sent = Buffer.from(sha256(String(code || '').replace(/\s+/g, '')));
+    const expected = Buffer.from(u.otp_hash);
+    if (sent.length !== expected.length || !crypto.timingSafeEqual(sent, expected)) {
+      await db.query('UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = ?', [req.user.id]);
+      throw new HttpError(400, 'That code is not right. Check the email and try again.');
     }
     checkPassword(password, req.user);
     const hash = await hasher.hash(password, 11);
-    await db.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, req.user.id]);
+    await db.query('UPDATE users SET password_hash = ?, otp_hash = NULL, otp_expires = NULL, otp_attempts = 0 WHERE id = ?', [hash, req.user.id]);
     setSession(res, { ...req.user, password_hash: hash });
     notify.passwordChanged(req.user);
     res.json({ ok: true });

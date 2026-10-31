@@ -44,7 +44,8 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { EmptyState, UserAvatar } from '@/components/common';
-import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { AttachButton, FileChips, FileTypeIcon, useFileList } from '@/components/file-attachments';
+import { Attachment, AttachmentContent, AttachmentDescription, AttachmentMedia, AttachmentTitle, AttachmentTrigger } from '@/components/ui/attachment';
 import { RecipientInput } from '@/components/recipient-input';
 import { RichEditor } from '@/components/rich-editor';
 import { useMailboxes, type Mailbox } from '@/hooks/use-mailboxes';
@@ -875,15 +876,18 @@ function Reader({
         {m.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {m.attachments.map((a) => (
-              <a
-                key={a.id}
-                href={msgUrl(`/attachments/${encodeURIComponent(a.id)}?name=${encodeURIComponent(a.name)}`)}
-                className="flex max-w-64 items-center gap-2 rounded-md border px-3 py-2 text-xs hover:bg-muted/50"
-              >
-                <FileText className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate font-medium">{a.name}</span>
-                <span className="shrink-0 text-muted-foreground">{fileSize(a.size)}</span>
-              </a>
+              <Attachment key={a.id} size="sm" className="max-w-64">
+                <AttachmentMedia>
+                  <FileTypeIcon mime={a.contentType} name={a.name} />
+                </AttachmentMedia>
+                <AttachmentContent>
+                  <AttachmentTitle title={a.name}>{a.name}</AttachmentTitle>
+                  <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
+                </AttachmentContent>
+                <AttachmentTrigger asChild>
+                  <a href={msgUrl(`/attachments/${encodeURIComponent(a.id)}?name=${encodeURIComponent(a.name)}`)} aria-label={`Download ${a.name}`} />
+                </AttachmentTrigger>
+              </Attachment>
             ))}
           </div>
         )}

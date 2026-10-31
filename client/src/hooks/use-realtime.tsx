@@ -85,10 +85,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         prev && !prev.messages.some((m) => m.id === message.id) ? { ...prev, messages: [...prev.messages, message] } : prev
       );
       if (message.user_id) setTyping((t) => setTypingEntry(t, ticketId, message.user_id!, null));
+      // The assistant's analysis depends on the conversation.
+      qc.invalidateQueries({ queryKey: ['ai', ticketId] });
       refreshLists();
     });
     socket.on('ticket:update', ({ ticket }: { ticket: Ticket }) => {
       putTicket(ticket);
+      qc.invalidateQueries({ queryKey: ['ai', ticket.id] });
       refreshLists();
     });
     socket.on('ticket:new', ({ ticket }: { ticket: Ticket }) => {

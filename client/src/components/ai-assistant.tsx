@@ -49,7 +49,10 @@ export function AiInsightPanel({ ticketId, autoRun = false, onUseDraft }: { tick
   });
   const run = useMutation({
     mutationFn: (force: boolean) => api.post<{ insight: AiInsight; cached: boolean }>(`/tickets/${ticketId}/ai`, { force }),
-    onSuccess: (r) => qc.setQueryData(['ai', ticketId], { enabled: true, provider: r.insight.provider, insight: { ...r.insight, stale: false } }),
+    onSuccess: (r, force) => {
+      qc.setQueryData(['ai', ticketId], { enabled: true, provider: r.insight.provider, insight: { ...r.insight, stale: false } });
+      if (force) toast.success(r.insight.provider === 'builtin' ? 'Assistant refreshed' : 'New analysis ready');
+    },
     onError: (err) => toast.error(errorMessage(err)),
   });
   const insight = stored.data?.insight;
@@ -126,8 +129,8 @@ export function AiInsightPanel({ ticketId, autoRun = false, onUseDraft }: { tick
             Copy
           </Button>
           <Button size="xs" variant="ghost" onClick={() => run.mutate(true)} disabled={run.isPending}>
-            <RefreshCw />
-            {insight.provider === 'builtin' ? 'Refresh' : 'Regenerate'}
+            {run.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {run.isPending ? 'Refreshing...' : insight.provider === 'builtin' ? 'Refresh' : 'Regenerate'}
           </Button>
         </div>
       </div>
@@ -135,7 +138,7 @@ export function AiInsightPanel({ ticketId, autoRun = false, onUseDraft }: { tick
       {insight.used_saved_reply && <p className="text-[11px] text-muted-foreground">Draft based on your saved reply "{insight.used_saved_reply}".</p>}
       <p className="text-[11px] text-muted-foreground">
         {insight.provider === 'builtin'
-          ? 'Worked out by the built-in assistant from this ticket. Fill in any [brackets] and check before sending.'
+          ? `Worked out by the built-in assistant from this ticket${insight.created_at ? `, updated ${timeAgo(insight.created_at)}` : ''}. Fill in any [brackets] and check before sending.`
           : `AI suggestion (${insight.provider === 'ollama' ? 'your own model' : 'Claude'}) from ${timeAgo(insight.created_at)}. Check before sending; it can make mistakes.`}
       </p>
     </div>

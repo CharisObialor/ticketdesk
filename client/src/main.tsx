@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { AppLayout, HomeRedirect, StaffOnly } from '@/components/app-layout';
+import { AppLayout, ClientOnly, HomeRedirect, StaffOnly } from '@/components/app-layout';
+import { basename, currentPath } from '@/lib/url-key';
 import { EmptyState } from '@/components/common';
 import { SessionProvider } from '@/hooks/use-session';
 import { ThemeProvider } from '@/hooks/use-theme';
@@ -41,7 +42,7 @@ queryClient.getQueryCache().subscribe((event) => {
   const err = event.query.state.error;
   if (event.type === 'updated' && err instanceof ApiError && err.status === 401 && event.query.queryKey[0] !== 'me') {
     if (/inactivity/i.test(err.message)) {
-      window.location.href = `/login?reason=idle&next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      window.location.href = `/login?reason=idle&next=${encodeURIComponent(currentPath())}`;
       return;
     }
     queryClient.setQueryData(['me'], null);
@@ -102,6 +103,8 @@ const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
     element: <AppLayout />,
+    // Shown for a moment when the portal opens straight onto an on-demand page (such as /dashboard).
+    hydrateFallbackElement: <div className="min-h-svh bg-background" />,
     children: [
       { index: true, element: <HomeRedirect /> },
       { path: 'tickets', element: <TicketsPage /> },
@@ -110,6 +113,14 @@ const router = createBrowserRouter([
       { path: 'messages', element: <MessagesPage /> },
       { path: 'messages/:type/:id', element: <MessagesPage /> },
       { path: 'profile', element: <ProfilePage /> },
+      {
+        element: <ClientOnly />,
+        children: [
+          { path: 'home', lazy: page(() => import('@/pages/client-home')) },
+          { path: 'sites', lazy: page(() => import('@/pages/client-sites')) },
+          { path: 'performance', lazy: page(() => import('@/pages/client-performance')) },
+        ],
+      },
       {
         element: <StaffOnly />,
         children: [
@@ -120,6 +131,7 @@ const router = createBrowserRouter([
           { path: 'visits', lazy: page(() => import('@/pages/visits')) },
           { path: 'visits/:id', lazy: () => loadFresh(() => import('@/pages/visits')).then((m) => ({ Component: m.VisitDetailPage })) },
           { path: 'saved-replies', lazy: page(() => import('@/pages/saved-replies')) },
+          { path: 'technicians', lazy: page(() => import('@/pages/technicians')) },
         ],
       },
       {
@@ -134,7 +146,7 @@ const router = createBrowserRouter([
       { path: '*', element: <NotFound /> },
     ],
   },
-]);
+], { basename });
 
 // Installable app: the service worker caches the app shell so it opens instantly (production builds only).
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

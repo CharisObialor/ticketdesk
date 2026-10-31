@@ -1,7 +1,16 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { FileText, Paperclip, Upload, X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { FileArchive, FileImage, FileSpreadsheet, FileText, Paperclip, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '@/components/ui/attachment';
 import { useSession } from '@/hooks/use-session';
 import { fileSize } from '@/lib/format';
 import { optimiseImage } from '@/lib/image';
@@ -53,19 +62,52 @@ export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' } = 
 
 export type FileListState = ReturnType<typeof useFileList>;
 
+// Icon for a file by its type, for attachment cards.
+export function FileTypeIcon({ mime, name }: { mime?: string | null; name: string }) {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  if (mime?.startsWith('image/')) return <FileImage />;
+  if (/spreadsheet|excel|csv/.test(mime ?? '') || ['xls', 'xlsx', 'csv'].includes(ext)) return <FileSpreadsheet />;
+  if (/zip|compressed|archive/.test(mime ?? '') || ['zip', 'rar', '7z'].includes(ext)) return <FileArchive />;
+  return <FileText />;
+}
+
+// Shows a photo's preview while it waits to be sent; the preview is released when it is removed.
+function PendingPreview({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file.type.startsWith('image/')) return;
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  return url ? (
+    <AttachmentMedia variant="image">
+      <img src={url} alt="" />
+    </AttachmentMedia>
+  ) : (
+    <AttachmentMedia>
+      <FileTypeIcon mime={file.type} name={file.name} />
+    </AttachmentMedia>
+  );
+}
+
 export function FileChips({ list }: { list: FileListState }) {
   if (!list.files.length) return null;
   return (
     <div className="flex flex-wrap gap-2">
       {list.files.map((f, i) => (
-        <div key={`${f.name}-${i}`} className="flex max-w-64 items-center gap-2 rounded-md border bg-muted/40 py-1 pr-1 pl-2 text-xs">
-          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">{f.name}</span>
-          <span className="shrink-0 text-muted-foreground">{fileSize(f.size)}</span>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={() => list.remove(i)} aria-label={`Remove ${f.name}`}>
-            <X />
-          </Button>
-        </div>
+        <Attachment key={`${f.name}-${i}`} size="sm" className="max-w-64">
+          <PendingPreview file={f} />
+          <AttachmentContent>
+            <AttachmentTitle title={f.name}>{f.name}</AttachmentTitle>
+            <AttachmentDescription>{fileSize(f.size)}</AttachmentDescription>
+          </AttachmentContent>
+          <AttachmentActions>
+            <AttachmentAction type="button" onClick={() => list.remove(i)} aria-label={`Remove ${f.name}`}>
+              <X />
+            </AttachmentAction>
+          </AttachmentActions>
+        </Attachment>
       ))}
     </div>
   );

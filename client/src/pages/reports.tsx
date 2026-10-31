@@ -67,6 +67,9 @@ interface Report {
     slaMet: number;
     slaMissed: number;
     slaPct: number | null;
+    resolutionMet: number;
+    resolutionMissed: number;
+    resolutionPct: number | null;
     ratings: number;
     avgRating: number | null;
     csatPct: number | null;
@@ -85,6 +88,8 @@ interface Report {
   byCategory: { name: string; total: number }[];
   byRequester: { name: string; total: number }[];
   handledBy: { name: string; tickets: number; resolved: number; ratings: number; avgRating: number | null }[];
+  // How this company's people rated each of our admins.
+  adminRatings?: { name: string; ratings: number; avgRating: number }[];
   ratingBreakdown: { rating: number; total: number }[];
   ratings: { ticket_id: number; rating: number; comment: string | null; updated_at: string; user_name: string | null; subject: string }[];
   openNow: { id: number; subject: string; priority: Priority; status: Status; escalated: number; created_at: string; assignee: string | null; ageDays: number }[];
@@ -123,6 +128,7 @@ function toCsv(r: Report) {
     ['Average first response', duration(k.avgFirstResponseMin)],
     ['Average resolution time', duration(k.avgResolutionMin)],
     ['Responded on time (SLA)', pct(k.slaPct)],
+    ['Resolved within SLA (TTR compliance)', pct(k.resolutionPct)],
     ['Satisfaction (4-5 stars)', pct(k.csatPct)],
     ['Average rating', k.avgRating === null ? '' : k.avgRating.toFixed(1)],
     ['Site visits', k.visits],
@@ -317,6 +323,13 @@ function ReportView({ r }: { r: Report }) {
         <Kpi icon={Clock} label="Average first response" value={duration(k.avgFirstResponseMin)} hint={`Median ${duration(k.medianFirstResponseMin)}`} />
         <Kpi icon={TimerReset} label="Average time to resolve" value={duration(k.avgResolutionMin)} hint={`Median ${duration(k.medianResolutionMin)}`} />
         <Kpi
+          icon={CircleCheck}
+          label="Resolved within SLA"
+          value={pct(k.resolutionPct)}
+          warn={k.resolutionPct !== null && k.resolutionPct < 80}
+          hint={`${k.resolutionMet} within target · ${k.resolutionMissed} late or overdue`}
+        />
+        <Kpi
           icon={Smile}
           label="Satisfaction"
           value={pct(k.csatPct)}
@@ -375,7 +388,8 @@ function ReportView({ r }: { r: Report }) {
                   <TableHead>Team member</TableHead>
                   <TableHead className="text-right">Tickets</TableHead>
                   <TableHead className="text-right">Resolved</TableHead>
-                  <TableHead className="text-right">Rating</TableHead>
+                  <TableHead className="text-right">Ticket rating</TableHead>
+                  <TableHead className="text-right">Admin rating</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -385,6 +399,12 @@ function ReportView({ r }: { r: Report }) {
                     <TableCell className="text-right tabular-nums">{h.tickets}</TableCell>
                     <TableCell className="text-right tabular-nums">{h.resolved}</TableCell>
                     <TableCell className="text-right tabular-nums">{h.avgRating === null ? '-' : `${h.avgRating.toFixed(1)} (${h.ratings})`}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {(() => {
+                        const a = r.adminRatings?.find((x) => x.name === h.name);
+                        return a ? `${a.avgRating.toFixed(1)} (${a.ratings})` : '-';
+                      })()}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

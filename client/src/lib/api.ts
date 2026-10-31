@@ -8,8 +8,14 @@ export class ApiError extends Error {
 
 type Body = Record<string, unknown> | FormData | undefined;
 
+// The server's CSRF token, from the cookie it sets at sign-in. Sent back with every change (POST, PUT, PATCH, DELETE).
+function csrfToken() {
+  const m = document.cookie.match(/(?:^|;\s*)td_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 async function request<T>(method: string, url: string, body?: Body): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = method === 'GET' ? {} : { 'X-CSRF-Token': csrfToken() };
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) {
@@ -41,6 +47,7 @@ export function uploadWithProgress<T>(url: string, body: FormData, onProgress: (
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api${url}`);
     xhr.withCredentials = true;
+    xhr.setRequestHeader('X-CSRF-Token', csrfToken());
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
     xhr.onload = () => {
       let data: { error?: string } = {};

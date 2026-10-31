@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useSession } from '@/hooks/use-session';
 import { api } from '@/lib/api';
+import { stripKey } from '@/lib/url-key';
 
 // Shared between tabs through localStorage, so activity in any tab keeps every tab signed in
 // and signing out in one tab signs out the others.
@@ -45,7 +46,7 @@ export function IdleTimeout() {
       await api.post('/auth/logout').catch(() => {});
       qc.clear();
       const next = window.location.pathname + window.location.search;
-      window.location.href = `/login?reason=idle${next && next !== '/' ? `&next=${encodeURIComponent(next)}` : ''}`;
+      window.location.href = `/login?reason=idle${next && next !== '/' ? `&next=${encodeURIComponent(stripKey(next))}` : ''}`;
     },
     [qc]
   );

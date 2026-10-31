@@ -16,6 +16,7 @@ import {
   Ticket as TicketIcon,
   Trash2,
   Users,
+  Timer,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -34,8 +35,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { CompanyLogo, EmptyState, PageHeader } from '@/components/common';
 import { optimiseImage } from '@/lib/image';
 import { useSession } from '@/hooks/use-session';
+import { CompanySlaDialog, slaSummary } from '@/components/sla-editor';
+import { CompanySites } from '@/components/company-sites';
+import { targetsFor } from '@/lib/sla';
 import { api, errorMessage } from '@/lib/api';
-import { formatDate } from '@/lib/format';
+import { PRIORITY_LABELS, duration, formatDate } from '@/lib/format';
 import type { Company } from '@/lib/types';
 
 export default function CompaniesPage() {
@@ -214,10 +218,79 @@ export default function CompaniesPage() {
   );
 }
 
+// Monthly statement: which client contacts get last month's figures by email on the 1st, and a send-now button.
+function StatementSection({ company }: { company: Company }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const recipients = company.statement_recipients ?? [];
+  const people = company.contacts.filter((p) => p.is_active);
+
+  async function setRecipients(next: number[]) {
+    setBusy(true);
+    try {
+      await api.patch(`/companies/${company.id}`, { statement_recipients: next });
+      qc.invalidateQueries({ queryKey: ['companies'] });
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function sendNow() {
+    setBusy(true);
+    try {
+      const r = await api.post<{ sent: number }>(`/companies/${company.id}/statement`);
+      toast.success(`Last month's statement sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}`);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h3 className="type-h6">Monthly statement</h3>
+          <p className="text-xs text-muted-foreground">Emailed on the 1st of each month with last month's figures.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={sendNow} disabled={busy || !recipients.length}>
+          {busy && <Loader2 className="animate-spin" />}
+          Send now
+        </Button>
+      </div>
+      {people.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Add people to this company first.</p>
+      ) : (
+        <ul className="divide-y rounded-lg border">
+          {people.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+              <span className="min-w-0 truncate">
+                {p.name}
+                {p.job_title && <span className="text-xs text-muted-foreground"> · {p.job_title}</span>}
+              </span>
+              <Switch
+                checked={recipients.includes(p.id)}
+                disabled={busy}
+                onCheckedChange={(on) => setRecipients(on ? [...recipients, p.id] : recipients.filter((id) => id !== p.id))}
+                aria-label={`Send the monthly statement to ${p.name}`}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // Company profile with everyone registered under it, each with a mailto link.
 function CompanySheet({ company, onClose, onEdit }: { company: Company | null; onClose: () => void; onEdit?: (c: Company) => void }) {
   const active = company?.contacts.filter((p) => p.is_active) ?? [];
   const emailAll = active.length ? `mailto:${active.map((p) => p.email).join(',')}` : null;
+  const { app } = useSession();
+  const [slaOpen, setSlaOpen] = useState(false);
+  const targets = company ? targetsFor(app?.sla, company.id) : null;
   return (
     <Sheet open={!!company} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-md">
@@ -257,6 +330,54 @@ function CompanySheet({ company, onClose, onEdit }: { company: Company | null; o
                   </div>
                 )}
               </dl>
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="type-h6">Service levels (SLA)</h3>
+                    <p className="text-xs text-muted-foreground">{slaSummary(company.sla)}</p>
+                  </div>
+                  {onEdit && (
+                    <Button variant="outline" size="sm" onClick={() => setSlaOpen(true)}>
+                      <Timer />
+                      Edit SLA
+                    </Button>
+                  )}
+                </div>
+                {targets && (
+                  <table className="w-full text-sm">
+                    <thead className="text-xs text-muted-foreground">
+                      <tr>
+                        <th className="pb-1 text-left font-normal">{targets.categories.length ? 'Fault category' : 'Priority'}</th>
+                        {!targets.categories.length && <th className="pb-1 text-left font-normal">Respond</th>}
+                        <th className="pb-1 text-right font-normal">Resolve</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {targets.categories.length
+                        ? targets.categories.map((c) => (
+                            <tr key={c.name}>
+                              <td className="py-1.5">
+                                {c.name} <span className="text-xs text-muted-foreground">({PRIORITY_LABELS[c.priority]})</span>
+                              </td>
+                              <td className="py-1.5 text-right tabular-nums">{duration(c.resolution ?? targets.resolution[c.priority])}</td>
+                            </tr>
+                          ))
+                        : (['urgent', 'high', 'normal', 'low'] as const).map((p) => (
+                            <tr key={p}>
+                              <td className="py-1.5">{PRIORITY_LABELS[p]}</td>
+                              <td className="py-1.5 tabular-nums">{duration(targets.response[p])}</td>
+                              <td className="py-1.5 text-right tabular-nums">{duration(targets.resolution[p])}</td>
+                            </tr>
+                          ))}
+                    </tbody>
+                  </table>
+                )}
+              </section>
+              {slaOpen && <CompanySlaDialog company={company} open={slaOpen} onOpenChange={setSlaOpen} />}
+
+              <CompanySites company={company} canEdit={!!onEdit} />
+              {onEdit && <StatementSection company={company} />}
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-2">
@@ -355,12 +476,13 @@ function CompanyDialog({ company, onClose }: { company: Company | null; onClose:
     setPreview(URL.createObjectURL(small));
   }
   const [active, setActive] = useState(company ? !!company.is_active : true);
+  const [siteContacts, setSiteContacts] = useState(!!Number(company?.site_contacts));
   const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const body = { name, email_domain: domain, notes, rc_number: rc, is_active: active };
+    const body = { name, email_domain: domain, notes, rc_number: rc, site_contacts: siteContacts, is_active: active };
     try {
       const saved = company
         ? (await api.patch<{ company: Company }>(`/companies/${company.id}`, body)).company
@@ -441,6 +563,13 @@ function CompanyDialog({ company, onClose }: { company: Company | null; onClose:
           <div className="grid gap-2">
             <Label htmlFor="company-notes">Internal notes</Label>
             <Textarea id="company-notes" rows={3} maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div className="space-y-0.5">
+              <Label htmlFor="company-site-contacts">Ask for OM and FSE</Label>
+              <p className="text-xs text-muted-foreground">Clients must give the site's Operations Manager and Field Service Engineer on each new ticket.</p>
+            </div>
+            <Switch id="company-site-contacts" checked={siteContacts} onCheckedChange={setSiteContacts} />
           </div>
           <div className="flex items-center justify-between rounded-lg border p-3">
             <div className="space-y-0.5">

@@ -27,9 +27,11 @@ router.use(requireAuth);
 router.get(
   '/notifications',
   wrap(async (req, res) => {
+    // Clients only see notices about their own tickets, messages and visits.
+    const only = req.user.role === 'client' ? `AND ${require('../inapp').CLIENT_FILTER}` : '';
     const [items, unread] = await Promise.all([
-      db.query('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 40', [req.user.id]),
-      db.one('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0', [req.user.id]),
+      db.query(`SELECT * FROM notifications WHERE user_id = ? ${only} ORDER BY id DESC LIMIT 40`, [req.user.id]),
+      db.one(`SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0 ${only}`, [req.user.id]),
     ]);
     res.json({ items, unread: Number(unread.n) || 0 });
   })
@@ -195,7 +197,9 @@ router.post(
       [t.id, technicianId, scheduledAt, duration, clean(req.body.location, 255) || null, clean(req.body.notes, 5000) || null, req.user.id, ts, ts]
     );
     const v = await db.one(`${VISIT_SELECT} WHERE v.id = ?`, [r.insertId]);
-    await svc.systemMessage(t, req.user, `Site visit scheduled with ${v.technician_name}.`);
+    // Clients see that a visit is booked; only the team sees which engineer is going.
+    await svc.systemMessage(t, req.user, 'Site visit scheduled.');
+    await svc.teamNote(t, req.user, `Site visit scheduled with ${v.technician_name}.`);
     await svc.touch(t.id);
     notify.visitChanged(v, t, req.user, 'scheduled');
     res.status(201).json({ visit: v });
@@ -227,7 +231,8 @@ router.patch(
     const updated = await db.one(`${VISIT_SELECT} WHERE v.id = ?`, [v.id]);
     if (scheduledAt !== v.scheduled_at || Number(technicianId) !== Number(v.technician_id)) {
       const t = await svc.getTicket(v.ticket_id);
-      await svc.systemMessage(t, req.user, `Site visit rescheduled (technician: ${updated.technician_name || 'unassigned'}).`);
+      await svc.systemMessage(t, req.user, 'Site visit rescheduled.');
+      await svc.teamNote(t, req.user, `Site visit rescheduled (technician: ${updated.technician_name || 'unassigned'}).`);
       await svc.touch(t.id);
       notify.visitChanged(updated, t, req.user, 'rescheduled');
     }
@@ -259,7 +264,8 @@ router.post(
     if (v.status !== 'scheduled') throw new HttpError(400, 'This visit has already started or finished');
     await db.query("UPDATE site_visits SET status = 'in_progress', started_at = ?, updated_at = ? WHERE id = ?", [now(), now(), v.id]);
     const t = await svc.getTicket(v.ticket_id);
-    await svc.systemMessage(t, req.user, `${req.user.name} arrived on site and started the visit.`);
+    await svc.systemMessage(t, req.user, 'Our engineer arrived on site and started the visit.');
+    await svc.teamNote(t, req.user, `${req.user.name} arrived on site and started the visit.`);
     await svc.touch(t.id);
     res.json({ visit: await db.one(`${VISIT_SELECT} WHERE v.id = ?`, [v.id]) });
   })
@@ -303,13 +309,15 @@ router.post(
       const lines = [
         'Site visit report',
         '',
-        `Technician: ${req.user.name}`,
+        // Clients see this report, and never learn our engineers' names.
+        'Engineer: DateHeight engineer',
         `Location: ${v.location || v.company_name}`,
         '',
         report,
       ];
       if (signedBy) lines.push('', `Signed off on site by: ${signedBy}${sig ? ' (signature attached)' : ''}`);
       await svc.postReply(t, req.user, { body: lines.join('\n'), files });
+      await svc.teamNote(t, req.user, `Site visit completed by ${req.user.name}. The client can now sign the job completion certificate.`);
       res.json({ visit: await db.one(`${VISIT_SELECT} WHERE v.id = ?`, [v.id]) });
     } catch (err) {
       cleanup(files);

@@ -108,6 +108,8 @@ module.exports = {
   storageDir: path.resolve(root, env.STORAGE_DIR || 'storage'),
   // Kept modest so uploads (and emails that carry them) stay light on the server.
   upload: { maxMb: int(env.UPLOAD_MAX_MB, 10), maxFiles: int(env.UPLOAD_MAX_FILES, 5) },
+  // Photos on an engineer's work update (before and after): more files, with a cap on the total per update.
+  workUpload: { maxFiles: int(env.WORK_PHOTOS_MAX, 40), maxMb: int(env.UPLOAD_MAX_MB, 10), maxTotalMb: int(env.WORK_PHOTOS_MAX_TOTAL_MB, 200) },
   // Attachments on emails sent from the Mail page (total per email). Microsoft 365 must allow this size too.
   mailUpload: { maxTotalMb: int(env.MAIL_ATTACHMENT_MAX_MB, 100), maxFiles: int(env.MAIL_ATTACHMENT_MAX_FILES, 20) },
   slaMinutes: {

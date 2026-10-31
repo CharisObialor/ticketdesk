@@ -109,6 +109,16 @@ let draining = false;
 // `sender` ({ name, email }) is the staff member who triggered it; with Microsoft 365 it is sent from their mailbox.
 function send(message) {
   if (!message || !message.to) return;
+  // Time-critical account emails (one-time codes, reset links) go straight out instead of waiting behind a busy
+  // queue; if that fails they are queued and retried like any other email.
+  if (message.urgent) {
+    const { urgent: _urgent, ...rest } = message;
+    deliver(rest).catch((err) => {
+      console.error(`[mail] to ${rest.to} failed, queued for retry: ${errorText(err)}`);
+      send(rest);
+    });
+    return;
+  }
   const db = require('./db');
   if (!db.ready()) {
     // Outside the running app (scripts): send directly.
@@ -129,6 +139,8 @@ function send(message) {
       deliver(message).catch((e) => console.error(`[mail] to ${message.to} failed: ${errorText(e)}`));
     });
 }
+
+let lastPurge = 0;
 
 // Sends every queued email that is due. Runs right after queueing and every 30 seconds.
 async function processOutbox() {
@@ -158,8 +170,11 @@ async function processOutbox() {
         if (!giveUp && /fetch failed|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED/.test(errorText(err))) break;
       }
     }
-    // Keep a week of sent mail for troubleshooting.
-    await db.query("DELETE FROM mail_outbox WHERE status = 'sent' AND sent_at < ?", [new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19).replace('T', ' ')]);
+    // Keep a week of sent mail for troubleshooting. Clearing older mail once an hour is plenty.
+    if (Date.now() - lastPurge > 3600e3) {
+      lastPurge = Date.now();
+      await db.query("DELETE FROM mail_outbox WHERE status = 'sent' AND sent_at < ?", [new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19).replace('T', ' ')]);
+    }
   } catch (err) {
     console.error('[mail] outbox run failed:', err.message);
   } finally {

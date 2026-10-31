@@ -36,7 +36,9 @@ function errorHandler(err, req, res, next) {
           ? `Attachments are too large (${require('./config').mailUpload.maxTotalMb} MB per email at most)`
           : `File is too large (${require('./config').upload.maxMb} MB per file at most)`
         : err.code === 'LIMIT_FILE_COUNT'
-          ? `Too many files (${require('./config').upload.maxFiles} per message at most)`
+          ? /\/work-updates$/.test(req.path)
+            ? `Too many photos (${require('./config').workUpload.maxFiles} per work update at most)`
+            : `Too many files (${require('./config').upload.maxFiles} per message at most)`
           : err.message;
     return res.status(400).json({ error: msg });
   }

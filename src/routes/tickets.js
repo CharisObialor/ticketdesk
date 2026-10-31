@@ -4,12 +4,14 @@ const notify = require('../notify');
 const realtime = require('../realtime');
 const transcript = require('../transcript');
 const signoff = require('../signoff');
+const sla = require('../sla');
+const { scrub } = require('../privacy');
 const svc = require('../services/tickets');
-const { upload, cleanup } = require('../uploads');
+const { upload, workUpload, cleanup } = require('../uploads');
 const { requireAuth, requireStaff, requireAdmin, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const mailer = require('../mailer');
 const { signatureFor, avatarUrl } = require('../email-template');
-const { wrap, now, parseTs, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, CATEGORIES, STATUS_LABELS } = require('../util');
+const { wrap, now, parseTs, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, STATUS_LABELS } = require('../util');
 const config = require('../config');
 
 router.use(requireAuth);
@@ -86,6 +88,10 @@ router.get(
       where.push('t.status = ?');
       params.push(req.query.status);
     }
+    if (Number(req.query.site_id)) {
+      where.push('t.site_id = ?');
+      params.push(Number(req.query.site_id));
+    }
     if (staff && req.query.company_id) {
       where.push('t.company_id = ?');
       params.push(Number(req.query.company_id));
@@ -132,6 +138,43 @@ router.get(
   })
 );
 
+// The client's site contacts: Operations Manager (OM) and Field Service Engineer (FSE). Only companies with
+// site_contacts on (Pan African Towers) use them, and every ticket for them must give both.
+const SITE_CONTACTS = [
+  ['om', 'Operations Manager (OM)'],
+  ['fse', 'Field Service Engineer (FSE)'],
+];
+// With `existing` (a ticket), only the fields sent are changed and the rest keep their saved values.
+function siteContacts(b, { required = false, existing = null } = {}) {
+  const out = {};
+  for (const [k, label] of SITE_CONTACTS) {
+    if (existing && b[`${k}_name`] === undefined && b[`${k}_phone`] === undefined) continue;
+    const pick = (f) => (b[f] === undefined && existing ? existing[f] : b[f]);
+    const name = clean(pick(`${k}_name`), 120).replace(/\s+/g, ' ');
+    const phone = clean(pick(`${k}_phone`), 40);
+    if (required && !name) throw new HttpError(400, `Enter the name of the ${label}`);
+    if (required && !phone) throw new HttpError(400, `Enter the phone number of the ${label}`);
+    if (phone && phone.replace(/\D/g, '').length < 7) throw new HttpError(400, `Enter a valid phone number for the ${label}`);
+    out[`${k}_name`] = name || null;
+    out[`${k}_phone`] = phone || null;
+  }
+  return out;
+}
+
+// The ticket's site: one of the company's active sites. Clients must choose one when their company has sites.
+async function siteFor(companyId, value, { required = false } = {}) {
+  const id = Number(value) || null;
+  if (!id) {
+    if (required && (await db.one('SELECT id FROM sites WHERE company_id = ? AND is_active = 1 LIMIT 1', [companyId]))) {
+      throw new HttpError(400, 'Choose the site ID');
+    }
+    return null;
+  }
+  const site = await db.one('SELECT id, code FROM sites WHERE id = ? AND company_id = ? AND is_active = 1', [id, companyId]);
+  if (!site) throw new HttpError(400, 'Choose a site from the list');
+  return site;
+}
+
 router.post(
   '/',
   upload.array('files'),
@@ -141,8 +184,6 @@ router.post(
     const subject = clean(req.body.subject, 255).replace(/[\r\n\t]+/g, ' '); // subjects go into email headers
     const body = clean(req.body.body, 50000);
     if (!subject || !body) throw new HttpError(400, 'Subject and description are required');
-    const priority = PRIORITIES.includes(req.body.priority) ? req.body.priority : 'normal';
-    const category = CATEGORIES.includes(req.body.category) ? req.body.category : 'General';
 
     let companyId = u.company_id;
     let createdBy = u.id;
@@ -156,8 +197,22 @@ router.post(
       }
     }
     if (!companyId) throw new HttpError(400, 'Your account is not linked to a company. Please contact support.');
+    // Companies with an SLA contract have their own fault categories, each with a set priority.
+    const names = sla.categoryNames(companyId);
+    const category = names.find((n) => n.toLowerCase() === String(req.body.category || '').toLowerCase()) || (names.includes('General') ? 'General' : 'Other');
+    const fault = sla.categoryOf(companyId, category);
+    const priority = PRIORITIES.includes(req.body.priority) ? req.body.priority : fault ? fault.priority : 'normal';
 
-    const t = await svc.createTicket({ actor: u, companyId, createdBy, subject, body, category, priority, files: req.files });
+    const usesContacts = Number((await db.one('SELECT site_contacts FROM companies WHERE id = ?', [companyId]))?.site_contacts) === 1;
+    const contacts = usesContacts ? siteContacts(req.body, { required: true }) : {};
+    // Some faults need photos from the client (set per fault category in the company SLA).
+    const photos = (req.files || []).filter((f) => /^image\//.test(f.mimetype)).length;
+    if (!staff && fault && fault.photos_min && photos < fault.photos_min) {
+      throw new HttpError(400, `Attach at least ${fault.photos_min} photo${fault.photos_min === 1 ? '' : 's'} of the ${fault.name} fault`);
+    }
+    const site = await siteFor(companyId, req.body.site_id, { required: !staff });
+
+    const t = await svc.createTicket({ actor: u, companyId, createdBy, subject, body, category, priority, contacts, siteId: site && site.id, files: req.files });
     res.status(201).json({ ticket: t });
   })
 );
@@ -168,7 +223,7 @@ router.get(
     const t = await loadTicket(req);
     const staff = isStaff(req.user);
     await svc.markRead(t, req.user);
-    const [messages, transcripts, reads, rating, visits] = await Promise.all([
+    const [messages, transcripts, reads, rating, adminRatings, visits] = await Promise.all([
       svc.getMessages(t.id, staff),
       staff
         ? db.query(
@@ -179,6 +234,7 @@ router.get(
         : [],
       svc.getReads(t.id),
       db.one('SELECT r.*, u.name AS user_name FROM ticket_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.ticket_id = ?', [t.id]),
+      ['resolved', 'closed'].includes(t.status) ? adminRatingsFor(t) : [],
       db.query(
         `SELECT v.*, u.name AS technician_name FROM site_visits v LEFT JOIN users u ON u.id = v.technician_id
          WHERE v.ticket_id = ? ORDER BY v.scheduled_at DESC`,
@@ -187,7 +243,8 @@ router.get(
     ]);
     // Visit notes are instructions for the technician (access codes, contacts), so clients do not get them.
     const visibleVisits = staff ? visits : visits.map((v) => ({ ...v, notes: null, created_by: null }));
-    res.json({ ticket: t, messages, transcripts, reads, rating, visits: visibleVisits, signoff: staff ? await signoff.state(t) : { active: signoff.pending(t) } });
+    const timeSpent = messages.reduce((n, m) => n + (Number(m.time_spent_min) || 0), 0);
+    res.json({ ticket: t, messages, transcripts, reads, rating, adminRatings, visits: visibleVisits, timeSpent, signoff: staff ? await signoff.state(t) : { active: signoff.pending(t) } });
   })
 );
 
@@ -211,6 +268,63 @@ router.post(
   })
 );
 
+// Work update from the engineer handling the ticket: what was done, how long it took, and photos from before and
+// after the work. The client sees it on the ticket and gets an email.
+const MAX_WORK_MINUTES = 120 * 1440;
+router.post(
+  '/:id/work-updates',
+  workUpload.array('files'),
+  withFiles(async (req, res) => {
+    const u = req.user;
+    if (!isStaff(u)) throw new HttpError(403, 'Only the support team can post work updates');
+    const t = await loadTicket(req);
+    if (t.assigned_to && Number(t.assigned_to) !== u.id && u.role !== 'admin') {
+      throw new HttpError(403, `This ticket is assigned to ${t.assignee_name}. Only they or an admin can post work updates.`);
+    }
+    if (t.status === 'closed') throw new HttpError(400, 'This ticket is closed');
+    const body = clean(req.body.body, 20000);
+    if (!body) throw new HttpError(400, 'Describe the work that was carried out');
+    let timeSpent = null;
+    if (req.body.time_spent_min !== undefined && req.body.time_spent_min !== '') {
+      timeSpent = Math.round(Number(req.body.time_spent_min));
+      if (!Number.isFinite(timeSpent) || timeSpent < 1 || timeSpent > MAX_WORK_MINUTES) throw new HttpError(400, 'Time spent must be between 1 minute and 120 days');
+    }
+    // labels[i] says whether files[i] is a "before" or "after" photo (anything else is a plain attachment).
+    let labels = [];
+    try {
+      labels = JSON.parse(req.body.labels || '[]');
+    } catch {
+      labels = [];
+    }
+    const files = req.files.map((f, i) => ({ ...f, label: ['before', 'after'].includes(labels[i]) && /^image\//.test(f.mimetype) ? labels[i] : null }));
+    const result = await svc.postReply(t, u, { body, files, kind: 'work_update', timeSpent });
+    res.status(201).json(result);
+  })
+);
+
+// Job message sent to an engineer by WhatsApp or text. The portal drafts it; it is sent from the admin's phone,
+// and the ticket records who it went to and on what number. A number typed in is saved on the engineer's profile.
+const CHANNELS = { whatsapp: 'WhatsApp', sms: 'text message', copy: 'copied message' };
+router.post(
+  '/:id/dispatch',
+  wrap(async (req, res) => {
+    const u = req.user;
+    if (!isStaff(u)) throw new HttpError(403, 'Only the support team can message engineers');
+    const t = await loadTicket(req);
+    const channel = CHANNELS[req.body.channel] ? req.body.channel : 'copy';
+    // Engineers come from the technicians contact list (they have no portal accounts).
+    const engineer = await db.one('SELECT id, name, phone FROM technicians WHERE id = ? AND is_active = 1', [Number(req.body.technician_id)]);
+    if (!engineer) throw new HttpError(400, 'Choose a technician from the list');
+    const phone = clean(req.body.phone, 40).replace(/[^\d+ ()-]/g, '');
+    if (phone && phone.replace(/\D/g, '').length < 7) throw new HttpError(400, 'Enter a valid phone number');
+    // A new number typed here is saved to the technician's contact when they had none; only admins can replace one.
+    if (phone && phone !== engineer.phone && (!engineer.phone || u.role === 'admin')) await db.query('UPDATE technicians SET phone = ?, updated_at = ? WHERE id = ?', [phone, now(), engineer.id]);
+    const number = phone || engineer.phone;
+    await svc.teamNote(t, u, `Job message for ${engineer.name}${number ? ` (${number})` : ''} sent by ${CHANNELS[channel]}.`);
+    res.json({ phone: number || null });
+  })
+);
+
 // Authors can correct their own messages. Edits are marked as edited and do not send new emails.
 router.patch(
   '/:id/messages/:messageId',
@@ -228,6 +342,72 @@ router.patch(
     const [message] = (await svc.getMessages(t.id, true)).filter((x) => x.id === m.id);
     realtime.toTicket(t, 'message:updated', { ticketId: t.id, message }, { internal: !!Number(m.is_internal) });
     res.json({ message });
+  })
+);
+
+// The admins a client can rate on a ticket: whoever it is assigned to, and anyone who replied to the client.
+// Only admins: other staff are not rated by name (technicians are never named to clients).
+const ticketAdmins = (t) =>
+  db.query(
+    `SELECT u.id, u.name, u.avatar, u.job_title FROM users u
+     WHERE u.role = 'admin' AND (u.id = ? OR u.id IN (SELECT m.user_id FROM messages m WHERE m.ticket_id = ? AND m.is_internal = 0 AND m.kind IN ('message', 'work_update')))
+     ORDER BY u.name`,
+    [t.assigned_to || 0, t.id]
+  );
+
+// Each admin who handled the ticket, with the rating they got (staff see who gave it).
+async function adminRatingsFor(t) {
+  const [admins, given] = await Promise.all([
+    ticketAdmins(t),
+    db.query('SELECT r.admin_id, r.rating, r.comment, r.updated_at, u.name AS user_name FROM admin_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.ticket_id = ?', [t.id]),
+  ]);
+  const byAdmin = new Map(given.map((g) => [Number(g.admin_id), g]));
+  // An admin who was rated stays listed even if they are no longer on the ticket.
+  const rated = given.filter((g) => !admins.some((a) => Number(a.id) === Number(g.admin_id))).map((g) => Number(g.admin_id));
+  const extra = rated.length ? await db.query(`SELECT id, name, avatar, job_title FROM users WHERE id IN (${db.inList(rated)})`, rated) : [];
+  return [...admins, ...extra].map((a) => {
+    const g = byAdmin.get(Number(a.id));
+    return {
+      admin_id: Number(a.id),
+      name: a.name,
+      avatar_url: a.avatar ? `/avatars/${a.avatar}.png` : null,
+      job_title: a.job_title || null,
+      rating: g ? Number(g.rating) : null,
+      comment: g ? g.comment : null,
+      user_name: g ? g.user_name : null,
+      updated_at: g ? g.updated_at : null,
+    };
+  });
+}
+
+// Clients rate each admin who handled their ticket, once it is resolved. Ratings can be changed later.
+router.post(
+  '/:id/admin-ratings',
+  wrap(async (req, res) => {
+    const u = req.user;
+    const t = await loadTicket(req);
+    if (isStaff(u)) throw new HttpError(403, 'Only clients can rate the team');
+    if (!['resolved', 'closed'].includes(t.status)) throw new HttpError(400, 'You can rate the team once the ticket has been resolved');
+    const list = Array.isArray(req.body.ratings) ? req.body.ratings.slice(0, 20) : [];
+    if (!list.length) throw new HttpError(400, 'Rate at least one person');
+    const allowed = new Map((await ticketAdmins(t)).map((a) => [Number(a.id), a]));
+    const ts = now();
+    const saved = [];
+    for (const item of list) {
+      const adminId = Number(item && item.admin_id);
+      const admin = allowed.get(adminId);
+      if (!admin) throw new HttpError(400, 'You can only rate people who handled this ticket');
+      const rating = Number(item.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, `Choose a rating from 1 to 5 for ${admin.name}`);
+      const comment = clean(item.comment, 1000) || null;
+      const prev = await db.one('SELECT rating FROM admin_ratings WHERE ticket_id = ? AND admin_id = ?', [t.id, adminId]);
+      if (prev) await db.query('UPDATE admin_ratings SET user_id = ?, rating = ?, comment = ?, updated_at = ? WHERE ticket_id = ? AND admin_id = ?', [u.id, rating, comment, ts, t.id, adminId]);
+      else await db.query('INSERT INTO admin_ratings (ticket_id, admin_id, user_id, rating, comment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [t.id, adminId, u.id, rating, comment, ts, ts]);
+      if (!prev || Number(prev.rating) !== rating) notify.adminRated(t, u, admin, rating, comment);
+      saved.push(adminId);
+    }
+    await svc.teamNote(t, u, `${u.name} rated ${saved.map((id) => allowed.get(id).name).join(', ')}.`);
+    res.json({ adminRatings: await adminRatingsFor(t) });
   })
 );
 
@@ -265,13 +445,14 @@ router.patch(
     const b = req.body || {};
     const fields = {};
     const notes = [];
+    const teamNotes = [];
     let statusTo = null;
     let assignee = null;
 
     if (b.status !== undefined && b.status !== t.status) {
       if (!STATUSES.includes(b.status)) throw new HttpError(400, 'Invalid status');
-      const clientAllowed =
-        (b.status === 'resolved' && OPEN_STATUSES.includes(t.status)) || (b.status === 'open' && t.status === 'resolved');
+      // Clients can reopen a resolved ticket, but only our team marks a ticket resolved.
+      const clientAllowed = b.status === 'open' && t.status === 'resolved';
       if (!staff && !clientAllowed) throw new HttpError(403, 'You cannot make that change');
       // Closing goes through sign-off: mark the ticket resolved and other admins approve it.
       if (b.status === 'closed' && (await signoff.requiredFor(u.id)) > 0) {
@@ -287,12 +468,25 @@ router.patch(
     if (staff && b.priority !== undefined && b.priority !== t.priority) {
       if (!PRIORITIES.includes(b.priority)) throw new HttpError(400, 'Invalid priority');
       fields.priority = b.priority;
-      notes.push(`Priority changed from ${cap(t.priority)} to ${cap(b.priority)}.`);
+      teamNotes.push(`Priority changed from ${cap(t.priority)} to ${cap(b.priority)}.`);
     }
     if (staff && b.category !== undefined && b.category !== t.category) {
-      if (!CATEGORIES.includes(b.category)) throw new HttpError(400, 'Invalid category');
+      if (!sla.categoryNames(t.company_id).includes(b.category)) throw new HttpError(400, 'Invalid category');
       fields.category = b.category;
-      notes.push(`Category changed to ${b.category}.`);
+      teamNotes.push(`Category changed to ${b.category}.`);
+    }
+    if (b.site_id !== undefined && (Number(b.site_id) || null) !== (t.site_id ? Number(t.site_id) : null)) {
+      const site = await siteFor(t.company_id, b.site_id);
+      fields.site_id = site ? site.id : null;
+      notes.push(site ? `Site changed to ${site.code}.` : 'Site removed.');
+    }
+    // Companies that require the OM and FSE (Pan African Towers) cannot have them cleared later.
+    const contactsRequired = Number((await db.one('SELECT site_contacts FROM companies WHERE id = ?', [t.company_id]))?.site_contacts) === 1;
+    const contacts = siteContacts(b, { existing: t });
+    if (contactsRequired && Object.keys(contacts).some((k) => !contacts[k])) throw new HttpError(400, 'The name and phone number of the OM and the FSE are required');
+    if (Object.keys(contacts).some((k) => (contacts[k] || null) !== (t[k] || null))) {
+      Object.assign(fields, contacts);
+      notes.push('Site contacts updated.');
     }
     if (staff && b.assigned_to !== undefined) {
       const id = b.assigned_to ? Number(b.assigned_to) : null;
@@ -302,20 +496,31 @@ router.patch(
           if (!assignee) throw new HttpError(400, 'Invalid assignee');
         }
         fields.assigned_to = id;
-        notes.push(assignee ? `Assigned to ${assignee.name}.` : 'Ticket unassigned.');
+        teamNotes.push(assignee ? `Assigned to ${assignee.name}.` : 'Ticket unassigned.');
       }
     }
 
     let updated = Object.keys(fields).length ? await svc.touch(t.id, fields) : t;
     for (const n of notes) await svc.systemMessage(updated, u, n);
+    for (const n of teamNotes) await svc.teamNote(updated, u, n);
 
     if (b.escalate === true) {
       if (!staff && t.escalated) throw new HttpError(400, 'This ticket is already escalated');
+      // Clients can ask for escalation only once the agreed time to resolve has passed without a resolution.
+      if (!staff) {
+        if (!OPEN_STATUSES.includes(t.status)) throw new HttpError(400, 'Only open tickets can be escalated');
+        const due = sla.resolutionDue(t);
+        if (!due) throw new HttpError(400, 'You can request escalation once the ticket has been assigned and its agreed time to resolve has passed.');
+        if (Date.now() < due.getTime()) {
+          const when = due.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: config.timezone });
+          throw new HttpError(400, `You can request escalation if the ticket is not resolved by ${when}, the agreed time to resolve.`);
+        }
+      }
       const reason = clean(b.reason, 500) || (staff ? `Escalated by ${u.name}.` : `Escalation requested by ${u.name} (${t.company_name}).`);
       updated = await svc.escalate(updated, u, reason);
     } else if (b.escalate === false && staff && t.escalated) {
       updated = await svc.touch(t.id, { escalated: 0 });
-      await svc.systemMessage(updated, u, 'Escalation cleared.');
+      await svc.teamNote(updated, u, 'Escalation cleared.');
     }
 
     // A new resolution asks the other admins to sign off before the ticket can close.
@@ -347,7 +552,9 @@ router.get(
     const includeInternal = isStaff(req.user) && req.query.internal !== '0';
     const messages = await svc.getMessages(t.id, includeInternal);
     res.attachment(`ticket-${t.id}-transcript.${ext}`);
-    res.type(type).send(build(t, messages, { includeInternal }));
+    // A client's copy leaves out our engineers' names, like everything else they see.
+    const client = !isStaff(req.user);
+    res.type(type).send(build(client ? scrub(t) : t, client ? scrub(messages) : messages, { includeInternal }));
   })
 );
 
@@ -379,7 +586,7 @@ router.post(
       heading: `Ticket #${t.id}: ${t.subject}`,
       icon: 'ticket',
       status: t.status,
-      greeting: 'Hello,',
+      greeting: 'Dear colleague,',
       intro: `${u.name} has shared a support ticket with you.`,
       paragraphs: note ? [note] : [],
       details: [

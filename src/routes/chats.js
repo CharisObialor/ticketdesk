@@ -3,6 +3,7 @@ const router = require('express').Router();
 const db = require('../db');
 const notify = require('../notify');
 const realtime = require('../realtime');
+const privacy = require('../privacy');
 const ticketsSvc = require('../services/tickets');
 const { upload, cleanup, uploadsDir } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
@@ -121,6 +122,8 @@ router.get(
   wrap(async (req, res) => {
     const u = req.user;
     const staff = isStaff(u);
+    // Clients see the team, not the engineer, as the author of the latest message.
+    const author = staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' THEN '${privacy.TEAM}' ELSE lu.name END`;
 
     const groups = await db.query(
       `SELECT g.id, g.name, g.company_id, c.name AS company_name, g.created_by, g.last_message_at,
@@ -128,7 +131,7 @@ router.get(
         (SELECT COUNT(*) FROM chat_members x WHERE x.group_id = g.id) AS member_count,
         (SELECT cm.body FROM chat_messages cm WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_body,
         (SELECT cm.kind FROM chat_messages cm WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_kind,
-        (SELECT lu.name FROM chat_messages cm LEFT JOIN users lu ON lu.id = cm.user_id WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_user,
+        (SELECT ${author} FROM chat_messages cm LEFT JOIN users lu ON lu.id = cm.user_id WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_user,
         CASE WHEN m.user_id IS NULL THEN 0 ELSE (
           SELECT COUNT(*) FROM chat_messages cm WHERE cm.group_id = g.id AND cm.kind = 'message'
             AND (cm.user_id IS NULL OR cm.user_id <> ?) AND cm.id > m.last_read_id
@@ -151,7 +154,7 @@ router.get(
       `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, t.last_activity_at,
         (SELECT tm.body FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_body,
         (SELECT tm.kind FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_kind,
-        (SELECT lu.name FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
+        (SELECT ${staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' OR tm.kind = 'work_update' THEN '${privacy.TEAM}' ELSE lu.name END`} FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
         CASE WHEN r.ticket_id IS NULL AND COALESCE(${staff ? 't.assigned_to' : 't.created_by'}, 0) <> ? THEN 0 ELSE (
           SELECT COUNT(*) FROM messages tm WHERE tm.ticket_id = t.id AND tm.kind = 'message' ${internal}
             AND (tm.user_id IS NULL OR tm.user_id <> ?) AND tm.id > COALESCE(r.last_read_id, 0)
@@ -208,7 +211,7 @@ router.get(
     if (q.length < 2) return res.json({ results: [] });
     const like = `%${q}%`;
     const groupRows = await db.query(
-      `SELECT cm.id, cm.group_id, cm.body, cm.created_at, u.name AS user_name, g.name AS title, c.name AS company_name
+      `SELECT cm.id, cm.group_id, cm.body, cm.created_at, u.name AS user_name, u.role AS user_role, g.name AS title, c.name AS company_name
        FROM chat_messages cm
        JOIN chat_groups g ON g.id = cm.group_id
        JOIN companies c ON c.id = g.company_id
@@ -219,7 +222,7 @@ router.get(
       [...(isAdmin(u) ? [] : [u.id]), like]
     );
     const ticketRows = await db.query(
-      `SELECT m.id, m.ticket_id, m.body, m.created_at, m.is_internal, u.name AS user_name, t.subject AS title, c.name AS company_name
+      `SELECT m.id, m.ticket_id, m.body, m.created_at, m.is_internal, u.name AS user_name, u.role AS user_role, t.subject AS title, c.name AS company_name
        FROM messages m
        JOIN tickets t ON t.id = m.ticket_id
        JOIN companies c ON c.id = t.company_id
@@ -235,8 +238,8 @@ router.get(
       return (start > 0 ? '...' : '') + body.slice(start, start + 160).replace(/\s+/g, ' ') + (body.length > start + 160 ? '...' : '');
     };
     const results = [
-      ...groupRows.map((r) => ({ type: 'group', id: r.group_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, snippet: snippet(r.body), created_at: r.created_at })),
-      ...ticketRows.map((r) => ({ type: 'ticket', id: r.ticket_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, snippet: snippet(r.body), created_at: r.created_at, internal: !!Number(r.is_internal) })),
+      ...groupRows.map((r) => ({ type: 'group', id: r.group_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, user_role: r.user_role, snippet: snippet(r.body), created_at: r.created_at })),
+      ...ticketRows.map((r) => ({ type: 'ticket', id: r.ticket_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, user_role: r.user_role, snippet: snippet(r.body), created_at: r.created_at, internal: !!Number(r.is_internal) })),
     ].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
     res.json({ results: results.slice(0, 30) });
   })

@@ -1,6 +1,7 @@
 // Suggested actions for admins: things in the portal that need someone to act, found by rules over live data.
 // Items disappear by themselves once the work is done; admins can also snooze or dismiss them for themselves.
 const config = require('./config');
+const sla = require('./sla');
 const db = require('./db');
 const backup = require('./backup');
 const inbound = require('./inbound');
@@ -40,21 +41,48 @@ async function computeActions() {
     const quickAssign = !t.assigned_to && lightest ? { kind: 'assign', userId: lightest.id, userName: lightest.name } : null;
 
     // 1. First-response SLA about to be missed, or missed.
-    if (!t.first_response_at && ['open', 'in_progress'].includes(t.status)) {
-      const limit = config.slaMinutes[t.priority] || config.slaMinutes.normal;
-      const waited = minutesSince(t.created_at);
+    // SLA clocks run from assignment; unassigned tickets are covered by the "unassigned" item below.
+    if (!t.first_response_at && ['open', 'in_progress'].includes(t.status) && t.assigned_at) {
+      const limit = sla.response(t);
+      const waited = minutesSince(t.assigned_at);
       const left = limit - waited;
       if (left <= limit * 0.25) {
         const overdue = left <= 0;
         items.push({
-          key: `sla:${t.id}`,
+          key: `sla:${t.id}:${overdue ? 'overdue' : 'due'}`,
           type: 'sla',
+          slaKind: overdue ? 'response_overdue' : 'response_due',
           category: 'tickets',
           severity: overdue || ['urgent', 'high'].includes(t.priority) ? 'urgent' : 'high',
           title: overdue ? `Response overdue by ${ago(-left)}: ${ref(t)}` : `Respond within ${ago(left)}: ${ref(t)}`,
-          detail: `${t.priority[0].toUpperCase() + t.priority.slice(1)} priority. No one from the team has replied since it was opened ${ago(waited)} ago.`,
+          detail: `${t.priority[0].toUpperCase() + t.priority.slice(1)} priority. No one from the team has replied since it was assigned ${ago(waited)} ago.`,
           suggestion: t.assigned_to ? `Remind ${t.assignee_name} or reply now.` : `Assign it${lightest ? ` (suggested: ${lightest.name}, ${lightest.open} open)` : ''} and reply.`,
-          since: t.created_at,
+          since: t.assigned_at,
+          link,
+          ticketId: t.id,
+          quick: quickAssign,
+        });
+        continue;
+      }
+    }
+
+    // 1b. Time to resolve (from the company's SLA) about to run out, or already passed.
+    {
+      const limit = sla.resolution(t);
+      const age = t.assigned_at ? minutesSince(t.assigned_at) : 0;
+      const left = limit - age;
+      if (t.assigned_at && t.status !== 'awaiting_client' && left <= Math.min(limit * 0.2, 1440)) {
+        const overdue = left <= 0;
+        items.push({
+          key: `ttr:${t.id}:${overdue ? 'overdue' : 'due'}`,
+          type: 'sla',
+          slaKind: overdue ? 'resolution_overdue' : 'resolution_due',
+          category: 'tickets',
+          severity: overdue ? 'urgent' : 'high',
+          title: overdue ? `Resolution overdue by ${ago(-left)}: ${ref(t)}` : `Resolve within ${ago(left)}: ${ref(t)}`,
+          detail: `${t.category}, ${t.priority} priority. The SLA allows ${ago(limit)} to resolve; it was assigned ${ago(age)} ago.`,
+          suggestion: t.assigned_to ? `Check progress with ${t.assignee_name} and post a work update.` : `Assign it${lightest ? ` (suggested: ${lightest.name})` : ''} and start work.`,
+          since: t.assigned_at,
           link,
           ticketId: t.id,
           quick: quickAssign,

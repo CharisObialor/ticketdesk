@@ -4,7 +4,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AppSidebar } from '@/components/app-sidebar';
-import { Footer } from '@/components/common';
+import { CompanyLogo, Footer } from '@/components/common';
 import { NotificationBell } from '@/components/notification-bell';
 import { IdleTimeout } from '@/components/idle-timeout';
 import { AdminTour } from '@/components/admin-tour';
@@ -61,6 +61,18 @@ function HeaderClock() {
   );
 }
 
+// Clients see which company their account belongs to, next to the portal name.
+function ClientCompany() {
+  const { user } = useSession();
+  if (!user || user.role !== 'client' || !user.company_name) return null;
+  return (
+    <div className="flex min-w-0 items-center gap-2 border-l pl-3" title={`Your company: ${user.company_name}`}>
+      <CompanyLogo src={user.company_logo_url} name={user.company_name} className="size-7" />
+      <span className="truncate text-sm font-medium">{user.company_name}</span>
+    </div>
+  );
+}
+
 export function AppLayout() {
   const { user, loading } = useSession();
   const location = useLocation();
@@ -82,7 +94,8 @@ export function AppLayout() {
           <header className="sticky top-0 z-10 print:hidden flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-            <span className="truncate text-sm font-medium">{BRAND.company}</span>
+            <span className="hidden truncate text-sm font-medium sm:inline">{BRAND.company}</span>
+            <ClientCompany />
             <div className="ml-auto flex items-center gap-1">
               <HeaderClock />
               <ConnectionStatus />
@@ -103,10 +116,16 @@ export function AppLayout() {
   );
 }
 
-// Staff land on the dashboard; clients on their ticket list.
+// Staff land on the dashboard; clients on their home page.
 export function HomeRedirect() {
   const { isStaff } = useSession();
-  return <Navigate to={isStaff ? '/dashboard' : '/tickets'} replace />;
+  return <Navigate to={isStaff ? '/dashboard' : '/home'} replace />;
+}
+
+export function ClientOnly() {
+  const { isStaff } = useSession();
+  if (isStaff) return <Navigate to="/" replace />;
+  return <Outlet />;
 }
 
 export function StaffOnly({ admin = false }: { admin?: boolean }) {

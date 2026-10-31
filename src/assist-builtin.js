@@ -2,6 +2,7 @@
 // word lists to produce the same fields as the AI assistant: summary, next step, urgency, client mood, risks and
 // a drafted reply (from templates and the team's saved replies).
 const config = require('./config');
+const sla = require('./sla');
 const { parseTs, STATUS_LABELS } = require('./util');
 
 const NEGATIVE = [
@@ -76,7 +77,7 @@ function analyse(t, messages, { visits = [], rating = null, savedReplies = [], a
     severe && negative >= 2 ? 'angry' : negative >= 5 ? 'angry' : negative >= 2 || severe ? 'frustrated' : positive > negative && positive >= 1 ? 'positive' : 'neutral';
 
   // SLA and waiting time.
-  const limit = config.slaMinutes[t.priority] || config.slaMinutes.normal;
+  const limit = sla.response(t);
   const slaOverdue = !t.first_response_at && open && minutesSince(t.created_at) > limit;
   const waitedMin = clientWaiting ? minutesSince(lastPublic.created_at) : 0;
 

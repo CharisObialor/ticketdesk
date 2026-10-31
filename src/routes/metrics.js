@@ -1,10 +1,11 @@
 const router = require('express').Router();
 const config = require('../config');
+const sla = require('../sla');
 const db = require('../db');
 const realtime = require('../realtime');
 const { TICKET_SELECT } = require('../services/tickets');
 const { requireStaff, STAFF_ROLES } = require('../auth');
-const { wrap, now, parseTs, OPEN_STATUSES, PRIORITIES } = require('../util');
+const { wrap, parseTs, OPEN_STATUSES, PRIORITIES } = require('../util');
 const { parseRange, buckets } = require('../periods');
 
 const minutesBetween = (a, b) => (parseTs(b) - parseTs(a)) / 60000;
@@ -62,7 +63,10 @@ async function build(range) {
        FROM tickets WHERE status IN (${openIn})`,
       OPEN_STATUSES
     ),
-    db.query('SELECT id, priority, category, created_at, first_response_at FROM tickets WHERE created_at >= ? AND created_at < ?', [since, until]),
+    db.query(
+      'SELECT id, company_id, priority, category, status, created_at, assigned_at, first_response_at, resolved_at FROM tickets WHERE created_at >= ? AND created_at < ?',
+      [since, until]
+    ),
     db.query('SELECT id, created_at, resolved_at, assigned_to FROM tickets WHERE resolved_at IS NOT NULL AND resolved_at >= ? AND resolved_at < ?', [
       since,
       until,
@@ -89,6 +93,13 @@ async function build(range) {
     [since, until]
   );
 
+  // How clients rated each admin's handling of jobs in the period.
+  const adminRatings = await db.query(
+    `SELECT r.admin_id, u.name, COUNT(*) AS n, AVG(r.rating) AS avg, SUM(CASE WHEN r.rating <= 2 THEN 1 ELSE 0 END) AS low
+     FROM admin_ratings r JOIN users u ON u.id = r.admin_id WHERE r.updated_at >= ? AND r.updated_at < ? GROUP BY r.admin_id, u.name ORDER BY avg DESC`,
+    [since, until]
+  );
+
   const status = Object.fromEntries(statusRows.map((r) => [r.status, Number(r.n)]));
   const series = buckets(range);
   for (const t of created) {
@@ -103,16 +114,8 @@ async function build(range) {
   const firstResponse = created.filter((t) => t.first_response_at).map((t) => minutesBetween(t.created_at, t.first_response_at));
   const resolution = resolved.map((t) => minutesBetween(t.created_at, t.resolved_at));
 
-  // SLA: tickets that got a first response in time vs. those that missed it (answered late or still overdue).
-  let slaMet = 0;
-  let slaMissed = 0;
-  const nowTs = now();
-  for (const t of created) {
-    const limit = config.slaMinutes[t.priority] || config.slaMinutes.normal;
-    const waited = t.first_response_at ? minutesBetween(t.created_at, t.first_response_at) : minutesBetween(t.created_at, nowTs);
-    if (t.first_response_at && waited <= limit) slaMet++;
-    else if (waited > limit) slaMissed++;
-  }
+  // SLA: tickets that met their response and resolution targets vs. those that missed (late, or still overdue).
+  const { slaMet, slaMissed, resolutionMet, resolutionMissed } = sla.tally(created);
 
   const count = (rows, key) => rows.reduce((m, r) => ((m[r[key]] = (m[r[key]] || 0) + 1), m), {});
   const resolvedBy = count(resolved, 'assigned_to');
@@ -137,6 +140,8 @@ async function build(range) {
       avgResolutionMin: avg(resolution),
       slaMet,
       slaMissed,
+      resolutionMet,
+      resolutionMissed,
       // Customer satisfaction: share of ratings that are 4 or 5, plus the average.
       ratings: ratings.length,
       csatPct: ratings.length ? Math.round((ratings.filter((r) => r.rating >= 4).length / ratings.length) * 100) : null,
@@ -169,6 +174,7 @@ async function build(range) {
       total: ratings.filter((r) => Number(r.rating) === n).length,
     })),
     recentRatings: ratings.slice(0, 6),
+    adminRatings: adminRatings.map((r) => ({ id: Number(r.admin_id), name: r.name, ratings: Number(r.n), avgRating: Math.round(Number(r.avg) * 10) / 10, low: Number(r.low) })),
   };
 }
 

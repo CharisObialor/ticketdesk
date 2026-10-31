@@ -21,7 +21,9 @@ import {
   Send,
   ShieldOff,
   TriangleAlert,
+  Smartphone,
   Users,
+  Wrench,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -38,15 +40,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,16 +57,39 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState, UserAvatar } from '@/components/common';
-import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { AttachButton, FileChips, FileTypeIcon, useFileList } from '@/components/file-attachments';
+import {
+  Attachment as UiAttachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from '@/components/ui/attachment';
+import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
 import { RecipientInput } from '@/components/recipient-input';
 import { AiAssistantCard } from '@/components/ai-assistant';
-import { EscalatedBadge, PriorityBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
-import { RatingCard, StaffRatingCard } from '@/components/rating';
+import { EscalatedBadge, PriorityBadge, ResolutionBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
+import { BeforeAfterPhotos, WorkUpdateDialog } from '@/components/work-update';
+import { EngineerMessageDialog } from '@/components/engineer-message';
+import { categoryOptions, resolutionDue, useNow } from '@/lib/sla';
+import { AdminRatingsCard, RatingCard, StaffAdminRatingsCard, StaffRatingCard, type AdminRating } from '@/components/rating';
 import { VisitsCard } from '@/components/visits';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, fileSize, formatDateTime, timeAgo } from '@/lib/format';
+import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, SignoffState, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
 import { fillPlaceholders } from '@/lib/placeholders';
@@ -83,8 +100,12 @@ export interface TicketData {
   transcripts: Transcript[];
   reads: ReadReceipt[];
   rating: Rating | null;
+  // Admins who handled the ticket, with the client's rating of each (resolved and closed tickets).
+  adminRatings?: AdminRating[];
   visits: Visit[];
   signoff: SignoffState;
+  // Total minutes recorded on work updates.
+  timeSpent?: number;
 }
 
 const UNASSIGNED = 'none';
@@ -114,7 +135,10 @@ export default function TicketDetailPage() {
   const messageCount = query.data?.messages.length ?? 0;
   useEffect(() => {
     if (!messageCount) return;
-    api.post(`/chats/tickets/${id}/read`).then(() => qc.invalidateQueries({ queryKey: ['chats'] }), () => {});
+    api.post(`/chats/tickets/${id}/read`).then(
+      () => qc.invalidateQueries({ queryKey: ['chats'] }),
+      () => {},
+    );
   }, [id, messageCount, qc]);
 
   if (query.isPending) {
@@ -142,7 +166,7 @@ export default function TicketDetailPage() {
     );
   }
 
-  const { ticket: t, messages, transcripts, reads, rating, visits, signoff } = query.data;
+  const { ticket: t, messages, transcripts, reads, rating, visits, signoff, timeSpent = 0, adminRatings = [] } = query.data;
   const isOpen = OPEN_STATUSES.includes(t.status);
   const canRate = !isStaff && (t.status === 'resolved' || t.status === 'closed');
 
@@ -174,11 +198,14 @@ export default function TicketDetailPage() {
               {!!t.escalated && <EscalatedBadge level={t.escalation_level} />}
             </div>
           </div>
-          <TicketActions ticket={t} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} busy={update.isPending} />
+          <TicketActions ticket={t} messages={messages} visits={visits} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} busy={update.isPending} />
         </div>
       </div>
 
       {canRate && <RatingCard ticket={t} rating={rating} />}
+      {canRate && adminRatings.length > 0 && (
+        <AdminRatingsCard key={adminRatings.map((a) => `${a.admin_id}:${a.rating}`).join()} ticket={t} admins={adminRatings} />
+      )}
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <Card className="gap-0 py-0">
@@ -208,9 +235,10 @@ export default function TicketDetailPage() {
         <div className="space-y-6">
           {isAdmin && app?.ai && <AiAssistantCard ticketId={t.id} />}
           {signoff?.active && <SignoffCard ticket={t} signoff={signoff} isStaff={isStaff} />}
-          <DetailsCard ticket={t} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} busy={update.isPending} />
+          <DetailsCard ticket={t} isStaff={isStaff} onUpdate={(b) => update.mutate(b)} busy={update.isPending} timeSpent={timeSpent} />
           <VisitsCard ticket={t} visits={visits} />
           {isStaff && rating && <StaffRatingCard rating={rating} />}
+          {isStaff && <StaffAdminRatingsCard admins={adminRatings} />}
           {isStaff && <TranscriptsCard transcripts={transcripts} />}
           {!isStaff && isOpen && (
             <Card className="gap-3">
@@ -228,10 +256,28 @@ export default function TicketDetailPage() {
   );
 }
 
-function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; isStaff: boolean; onUpdate: (b: Record<string, unknown>) => void; busy: boolean }) {
+function TicketActions({
+  ticket: t,
+  messages,
+  visits,
+  isStaff,
+  onUpdate,
+  busy,
+}: {
+  ticket: Ticket;
+  messages: Message[];
+  visits: Visit[];
+  isStaff: boolean;
+  onUpdate: (b: Record<string, unknown>) => void;
+  busy: boolean;
+}) {
   const qc = useQueryClient();
-  const { isAdmin } = useSession();
+  const { isAdmin, user } = useSession();
   const [escalateOpen, setEscalateOpen] = useState(false);
+  const [workOpen, setWorkOpen] = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
+  // The engineer the ticket is assigned to (or an admin, or anyone on staff while it is unassigned) reports the work.
+  const canReportWork = isStaff && t.status !== 'closed' && (isAdmin || !t.assigned_to || t.assigned_to === user?.id);
   const [emailOpen, setEmailOpen] = useState(false);
   const isOpen = OPEN_STATUSES.includes(t.status);
 
@@ -248,22 +294,32 @@ function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket;
 
   return (
     <div className="flex shrink-0 flex-wrap gap-2">
-      {!isStaff && isOpen && (
-        <Button variant="outline" onClick={() => onUpdate({ status: 'resolved' })} disabled={busy}>
-          <CircleCheck />
-          Mark as resolved
-        </Button>
-      )}
       {!isStaff && t.status === 'resolved' && (
         <Button variant="outline" onClick={() => onUpdate({ status: 'open' })} disabled={busy}>
           <RotateCcw />
           Reopen ticket
         </Button>
       )}
-      {(isStaff || (isOpen && !t.escalated)) && t.status !== 'closed' && (
-        <Button variant="outline" onClick={() => (t.escalated && isStaff ? onUpdate({ escalate: false }) : setEscalateOpen(true))} disabled={busy}>
-          {t.escalated && isStaff ? <ShieldOff /> : <TriangleAlert />}
-          {t.escalated && isStaff ? 'Clear escalation' : isStaff ? 'Escalate' : 'Request escalation'}
+      {isStaff && t.status !== 'closed' && (
+        <Button variant="outline" onClick={() => (t.escalated ? onUpdate({ escalate: false }) : setEscalateOpen(true))} disabled={busy}>
+          {t.escalated ? <ShieldOff /> : <TriangleAlert />}
+          {t.escalated ? 'Clear escalation' : 'Escalate'}
+        </Button>
+      )}
+      {/* Clients can ask for escalation once the agreed time to resolve has passed without a resolution. */}
+      {!isStaff && isOpen && !t.escalated && (
+        <ClientEscalateButton ticket={t} busy={busy} onClick={() => setEscalateOpen(true)} />
+      )}
+      {canReportWork && (
+        <Button onClick={() => setWorkOpen(true)}>
+          <Wrench />
+          Work update
+        </Button>
+      )}
+      {isStaff && t.status !== 'closed' && (
+        <Button variant="outline" onClick={() => setDispatchOpen(true)}>
+          <Smartphone />
+          Message engineer
         </Button>
       )}
       {isAdmin && (
@@ -306,6 +362,8 @@ function TicketActions({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket;
       </DropdownMenu>
       <EscalateDialog open={escalateOpen} onOpenChange={setEscalateOpen} isStaff={isStaff} onConfirm={(reason) => onUpdate({ escalate: true, reason })} />
       {emailOpen && <EmailTicketDialog ticket={t} onClose={() => setEmailOpen(false)} />}
+      {canReportWork && <WorkUpdateDialog ticket={t} open={workOpen} onOpenChange={setWorkOpen} />}
+      {dispatchOpen && <EngineerMessageDialog ticket={t} messages={messages} visits={visits} open={dispatchOpen} onOpenChange={setDispatchOpen} />}
     </div>
   );
 }
@@ -362,7 +420,14 @@ function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: ()
           )}
           <div className="grid gap-2">
             <Label htmlFor="share-note">Message (optional)</Label>
-            <Textarea id="share-note" rows={4} maxLength={5000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: Can you check the router logs for this site?" />
+            <Textarea
+              id="share-note"
+              rows={4}
+              maxLength={5000}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="For example: Can you check the router logs for this site?"
+            />
           </div>
           <DialogFooter>
             <DialogClose asChild>
@@ -381,7 +446,42 @@ function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: ()
   );
 }
 
-function EscalateDialog({ open, onOpenChange, isStaff, onConfirm }: { open: boolean; onOpenChange: (o: boolean) => void; isStaff: boolean; onConfirm: (reason: string) => void }) {
+function ClientEscalateButton({ ticket: t, busy, onClick }: { ticket: Ticket; busy: boolean; onClick: () => void }) {
+  const { app } = useSession();
+  const nowMs = useNow();
+  const due = resolutionDue(t, app?.sla);
+  const allowed = !!due && nowMs >= due.getTime();
+  const hint = !due
+    ? 'You can request escalation once the ticket is assigned and its agreed time to resolve has passed.'
+    : `You can request escalation if the ticket is not resolved by ${formatDateTime(due.toISOString().slice(0, 19).replace('T', ' '))}.`;
+  const button = (
+    <Button variant="outline" onClick={onClick} disabled={busy || !allowed}>
+      <TriangleAlert />
+      Request escalation
+    </Button>
+  );
+  if (allowed) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0}>{button}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64">{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function EscalateDialog({
+  open,
+  onOpenChange,
+  isStaff,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  isStaff: boolean;
+  onConfirm: (reason: string) => void;
+}) {
   const [reason, setReason] = useState('');
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -405,7 +505,14 @@ function EscalateDialog({ open, onOpenChange, isStaff, onConfirm }: { open: bool
           </DialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="reason">Reason</Label>
-            <Textarea id="reason" rows={4} maxLength={500} placeholder="Explain why this needs escalating" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <Textarea
+              id="reason"
+              rows={4}
+              maxLength={500}
+              placeholder="Explain why this needs escalating"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
           </div>
           <DialogFooter>
             <DialogClose asChild>
@@ -429,22 +536,18 @@ export function Thread({
   messages,
   isStaff,
   reads = [],
-  className,
+  fill = false,
 }: {
   ticket: Ticket;
   messages: Message[];
   isStaff: boolean;
   reads?: ReadReceipt[];
-  className?: string;
+  // Fill the rest of a full-height pane (Messages page) instead of a fixed maximum height (ticket page).
+  fill?: boolean;
 }) {
   const { user } = useSession();
   const { typingFor } = useRealtime();
-  const end = useRef<HTMLDivElement>(null);
   const typing = typingFor(ticket.id);
-
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: 'nearest' });
-  }, [messages.length, typing.length]);
 
   // "Seen by" goes under my latest message: everyone else whose read marker has reached it.
   // Clients never see read markers on internal notes (they cannot see the notes at all).
@@ -453,44 +556,62 @@ export function Thread({
     ? reads.filter((r) => r.user_id !== user?.id && r.last_read_id >= lastMine.id && (!lastMine.is_internal || isStaffRole(r.role))).map((r) => r.name)
     : [];
 
+  // shadcn chat layout: opens at the newest message, follows new replies while you are at the bottom, and offers
+  // a button back down when you have scrolled up to read.
   return (
-    <div className={cn('max-h-[calc(100svh-22rem)] min-h-64 space-y-5 overflow-y-auto p-4 md:p-6', className)}>
-      {messages.map((m) =>
-        m.kind === 'system' ? (
-          <div key={m.id} className="flex items-center gap-3 text-xs text-muted-foreground">
-            <Separator className="flex-1" />
-            <span className="flex max-w-[80%] items-center gap-1.5 text-center">
-              <Info className="size-3.5 shrink-0" />
-              <span>
-                {m.body} <span className="opacity-70">· {formatDateTime(m.created_at)}</span>
-              </span>
-            </span>
-            <Separator className="flex-1" />
-          </div>
-        ) : (
-          <div key={m.id} className="space-y-1">
-            <MessageItem message={m} ticket={ticket} own={m.user_id === user?.id} viewerIsStaff={isStaff} />
-            {m.id === lastMine?.id && seenBy.length > 0 && (
-              <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
-                <CheckCheck className="size-3.5 text-primary" />
-                Seen by {seenBy.join(', ')}
-              </div>
+    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+      <MessageScroller className={cn(fill && 'min-h-0 flex-1')}>
+        <MessageScrollerViewport className={cn(!fill && 'max-h-[calc(100svh-22rem)] min-h-64')}>
+          <MessageScrollerContent className="gap-5 p-4 md:p-6">
+            {messages.map((m) =>
+              m.kind === 'system' ? (
+                <MessageScrollerItem key={m.id} messageId={String(m.id)}>
+                  <Marker variant="separator" className="text-xs">
+                    <MarkerIcon>
+                      <Info className="size-3.5" />
+                    </MarkerIcon>
+                    <MarkerContent className="max-w-[80%]">
+                      {m.body} <span className="opacity-70">· {formatDateTime(m.created_at)}</span>
+                    </MarkerContent>
+                  </Marker>
+                </MessageScrollerItem>
+              ) : (
+                <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
+                  <MessageItem message={m} ticket={ticket} own={m.user_id === user?.id} viewerIsStaff={isStaff} seenBy={m.id === lastMine?.id ? seenBy : []} />
+                </MessageScrollerItem>
+              ),
             )}
-          </div>
-        )
-      )}
-      {typing.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3 animate-spin" />
-          {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
-        </div>
-      )}
-      <div ref={end} />
-    </div>
+            {typing.length > 0 && (
+              <Marker className="text-xs">
+                <MarkerIcon>
+                  <Loader2 className="size-3 animate-spin" />
+                </MarkerIcon>
+                <MarkerContent>
+                  {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
+                </MarkerContent>
+              </Marker>
+            )}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }
 
-function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Message; ticket: Ticket; own: boolean; viewerIsStaff: boolean }) {
+function MessageItem({
+  message: m,
+  ticket,
+  own,
+  viewerIsStaff,
+  seenBy,
+}: {
+  message: Message;
+  ticket: Ticket;
+  own: boolean;
+  viewerIsStaff: boolean;
+  seenBy: string[];
+}) {
   const qc = useQueryClient();
   const fromStaff = isStaffRole(m.user_role);
   const internal = !!m.is_internal;
@@ -500,18 +621,21 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
     mutationFn: (body: string) => api.patch<{ message: Message }>(`/tickets/${ticket.id}/messages/${m.id}`, { body }),
     onSuccess: ({ message }) => {
       qc.setQueryData<TicketData>(['ticket', ticket.id], (prev) =>
-        prev ? { ...prev, messages: prev.messages.map((x) => (x.id === message.id ? message : x)) } : prev
+        prev ? { ...prev, messages: prev.messages.map((x) => (x.id === message.id ? message : x)) } : prev,
       );
       setEditing(false);
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
 
+  // Your own messages sit on the right; internal notes keep their amber colour so they are never mistaken for replies.
   return (
-    <div className="group flex gap-3">
-      <UserAvatar name={m.user_name ?? m.sender_name} userId={m.user_id} className="mt-0.5" />
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+    <UiMessage align={own ? 'end' : 'start'} className="group">
+      <MessageAvatar className="self-start">
+        <UserAvatar name={m.user_name ?? m.sender_name} userId={m.user_id} />
+      </MessageAvatar>
+      <MessageContent className="gap-1.5">
+        <MessageHeader className={cn('flex-wrap gap-x-2 gap-y-1 px-0 text-sm font-normal text-foreground', own && 'flex-row-reverse')}>
           <span className="font-medium">{m.user_name ?? m.sender_name ?? 'Deleted user'}</span>
           {own && <span className="text-xs text-muted-foreground">(you)</span>}
           {m.sender_email && (
@@ -523,6 +647,12 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
           {fromStaff && !viewerIsStaff && (
             <Badge variant="secondary" className="font-normal">
               Support team
+            </Badge>
+          )}
+          {m.kind === 'work_update' && (
+            <Badge variant="outline" className="font-normal">
+              <Wrench />
+              Work update
             </Badge>
           )}
           {internal && (
@@ -543,25 +673,24 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
             <Button
               variant="ghost"
               size="icon-xs"
-              className="ml-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
+              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
               onClick={() => setEditing(true)}
               aria-label="Edit message"
             >
               <Pencil />
             </Button>
           )}
-        </div>
+        </MessageHeader>
         {editing ? (
-          <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
-        ) : (
-          <div
-            className={cn(
-              'rounded-lg border px-4 py-3 text-sm leading-relaxed break-words whitespace-pre-wrap',
-              internal ? 'border-amber-500/30 bg-amber-50 dark:bg-amber-500/10' : fromStaff ? 'bg-muted/50' : 'bg-background'
-            )}
-          >
-            {m.body}
+          <div className="w-full">
+            <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
           </div>
+        ) : (
+          <Bubble variant={internal ? 'outline' : own ? 'default' : fromStaff ? 'tinted' : 'muted'} align={own ? 'end' : 'start'} className="max-w-[90%]">
+            <BubbleContent className={cn('whitespace-pre-wrap', internal && 'border-amber-500/30 bg-amber-50 text-foreground dark:bg-amber-500/10')}>
+              {m.body}
+            </BubbleContent>
+          </Bubble>
         )}
         {(m.cc || m.bcc) && (
           <div className="space-y-0.5 text-xs text-muted-foreground">
@@ -569,9 +698,21 @@ function MessageItem({ message: m, ticket, own, viewerIsStaff }: { message: Mess
             {m.bcc && <div className="break-all">Bcc: {m.bcc.join(', ')}</div>}
           </div>
         )}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} />}
-      </div>
-    </div>
+        {m.kind === 'work_update' && !!m.time_spent_min && (
+          <div className="text-xs text-muted-foreground">
+            Time spent: <span className="font-medium text-foreground">{duration(m.time_spent_min)}</span>
+          </div>
+        )}
+        <BeforeAfterPhotos items={m.attachments} />
+        {m.attachments.some((a) => !a.label) && <Attachments items={m.attachments.filter((a) => !a.label)} />}
+        {seenBy.length > 0 && (
+          <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
+            <CheckCheck className="size-3.5 text-primary" />
+            Seen by {seenBy.join(', ')}
+          </MessageFooter>
+        )}
+      </MessageContent>
+    </UiMessage>
   );
 }
 
@@ -604,34 +745,51 @@ export function EditBox({ initial, busy, onSave, onCancel }: { initial: string; 
   );
 }
 
+// Files on a message: photos as preview cards, other files as cards with their type and size. Each opens or downloads.
 export function Attachments({ items, base = '/api/files' }: { items: Attachment[]; base?: string }) {
-  const images = items.filter((a) => /^image\/(png|jpe?g|gif|webp)$/.test(a.mime));
-  const others = items.filter((a) => !images.includes(a));
+  const isImage = (a: Attachment) => /^image\/(png|jpe?g|gif|webp)$/.test(a.mime);
+  const images = items.filter(isImage);
+  const others = items.filter((a) => !isImage(a));
   return (
     <div className="space-y-2">
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {images.map((a) => (
-            <a key={a.id} href={`${base}/${a.id}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border hover:opacity-90">
-              <img src={`${base}/${a.id}`} alt={a.original_name} className="h-28 max-w-56 object-cover" loading="lazy" />
-            </a>
+            <UiAttachment key={a.id} orientation="vertical" size="sm" className="w-28 has-data-[slot=attachment-content]:w-28">
+              <AttachmentMedia variant="image">
+                <img src={`${base}/${a.id}`} alt={a.original_name} loading="lazy" />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle title={a.original_name}>{a.original_name}</AttachmentTitle>
+                <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentTrigger asChild>
+                <a href={`${base}/${a.id}`} target="_blank" rel="noreferrer" aria-label={`Open ${a.original_name}`} />
+              </AttachmentTrigger>
+            </UiAttachment>
           ))}
         </div>
       )}
       {others.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {others.map((a) => (
-            <a
-              key={a.id}
-              href={`${base}/${a.id}${a.mime === 'application/pdf' ? '' : '?download=1'}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex max-w-64 items-center gap-2 rounded-md border px-3 py-2 text-xs hover:bg-muted/50"
-            >
-              <FileText className="size-4 shrink-0 text-muted-foreground" />
-              <span className="truncate font-medium">{a.original_name}</span>
-              <span className="shrink-0 text-muted-foreground">{fileSize(a.size)}</span>
-            </a>
+            <UiAttachment key={a.id} size="sm" className="max-w-64">
+              <AttachmentMedia>
+                <FileTypeIcon mime={a.mime} name={a.original_name} />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle title={a.original_name}>{a.original_name}</AttachmentTitle>
+                <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentTrigger asChild>
+                <a
+                  href={`${base}/${a.id}${a.mime === 'application/pdf' ? '' : '?download=1'}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`${a.mime === 'application/pdf' ? 'Open' : 'Download'} ${a.original_name}`}
+                />
+              </AttachmentTrigger>
+            </UiAttachment>
           ))}
         </div>
       )}
@@ -661,7 +819,9 @@ function SavedReplyPicker({ ticket, onPick }: { ticket: Ticket; onPick: (text: s
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Insert a saved reply</DialogTitle>
-            <DialogDescription>Placeholders such as the client&apos;s name are filled in for this ticket. You can edit the text before sending.</DialogDescription>
+            <DialogDescription>
+              Placeholders such as the client&apos;s name are filled in for this ticket. You can edit the text before sending.
+            </DialogDescription>
           </DialogHeader>
           <Input placeholder="Search saved replies" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
           <div className="max-h-80 space-y-1 overflow-y-auto">
@@ -763,9 +923,7 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
     try {
       const { message, ticket: updated } = await api.post<{ message: Message; ticket: Ticket }>(`/tickets/${ticket.id}/messages`, fd);
       qc.setQueryData<TicketData>(['ticket', ticket.id], (prev) =>
-        prev
-          ? { ...prev, ticket: updated, messages: prev.messages.some((m) => m.id === message.id) ? prev.messages : [...prev.messages, message] }
-          : prev
+        prev ? { ...prev, ticket: updated, messages: prev.messages.some((m) => m.id === message.id) ? prev.messages : [...prev.messages, message] } : prev,
       );
       qc.invalidateQueries({ queryKey: ['ticket', ticket.id] });
       setBody('');
@@ -831,8 +989,8 @@ export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean
             <RecipientInput id="reply-bcc" value={bcc} onChange={setBcc} placeholder="name@company.com" />
           </div>
           <p className="text-xs text-muted-foreground">
-            This reply will be emailed from {app?.mailbox ?? 'your mailbox'} to the client and these people, with any attachments. Their replies come back to this ticket.
-            Bcc addresses are only visible to staff.
+            This reply will be emailed from {app?.mailbox ?? 'your mailbox'} to the client and these people, with any attachments. Their replies come back to
+            this ticket. Bcc addresses are only visible to staff.
           </p>
         </div>
       )}
@@ -867,7 +1025,13 @@ function SignoffCard({ ticket: t, signoff, isStaff }: { ticket: Ticket; signoff:
   const decide = useMutation({
     mutationFn: (decision: 'approve' | 'reject') => api.post<{ closed: boolean }>(`/tickets/${t.id}/signoff`, { decision, comment }),
     onSuccess: (r, decision) => {
-      toast.success(decision === 'reject' ? 'Sent back. The ticket is in progress again.' : r.closed ? 'Signed off. The ticket is now closed.' : 'Signed off. Waiting for another admin.');
+      toast.success(
+        decision === 'reject'
+          ? 'Sent back. The ticket is in progress again.'
+          : r.closed
+            ? 'Signed off. The ticket is now closed.'
+            : 'Signed off. Waiting for another admin.',
+      );
       setComment('');
       setSendingBack(false);
       qc.invalidateQueries({ queryKey: ['ticket', t.id] });
@@ -905,7 +1069,8 @@ function SignoffCard({ ticket: t, signoff, isStaff }: { ticket: Ticket; signoff:
       <CardContent className="space-y-3 text-sm">
         <p className="text-muted-foreground">
           {signoff.requestedBy ? `${signoff.requestedBy.name} marked this resolved` : 'Marked resolved'}
-          {signoff.requestedAt ? ` ${timeAgo(signoff.requestedAt)}` : ''}. It closes once {required === 1 ? 'another admin approves' : `${required} other admins approve`}.
+          {signoff.requestedAt ? ` ${timeAgo(signoff.requestedAt)}` : ''}. It closes once{' '}
+          {required === 1 ? 'another admin approves' : `${required} other admins approve`}.
         </p>
         <div className="flex items-center gap-2">
           {Array.from({ length: required }).map((_, i) => (
@@ -990,7 +1155,19 @@ interface DetailDraft {
   assigned_to: number | null;
 }
 
-function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; isStaff: boolean; onUpdate: (b: Record<string, unknown>) => void; busy: boolean }) {
+function DetailsCard({
+  ticket: t,
+  isStaff,
+  onUpdate,
+  busy,
+  timeSpent,
+}: {
+  ticket: Ticket;
+  isStaff: boolean;
+  onUpdate: (b: Record<string, unknown>) => void;
+  busy: boolean;
+  timeSpent: number;
+}) {
   const { app } = useSession();
   const staff = useQuery({
     queryKey: ['staff'],
@@ -1066,7 +1243,7 @@ function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; i
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {(app?.categories ?? [t.category]).map((c) => (
+                  {[...new Set([...categoryOptions(app, t.company_id), t.category])].map((c) => (
                     <SelectItem key={c} value={c}>
                       {c}
                     </SelectItem>
@@ -1075,8 +1252,14 @@ function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; i
               </Select>
             </DetailRow>
             <DetailRow label="Assignee">
-              <Select value={draft.assigned_to ? String(draft.assigned_to) : UNASSIGNED} onValueChange={(v) => set('assigned_to', v === UNASSIGNED ? null : Number(v))}>
-                <SelectTrigger size="sm" className="h-auto min-h-8 w-full py-1 [&_[data-slot=select-value]]:flex-col [&_[data-slot=select-value]]:items-start [&_[data-slot=select-value]]:gap-0">
+              <Select
+                value={draft.assigned_to ? String(draft.assigned_to) : UNASSIGNED}
+                onValueChange={(v) => set('assigned_to', v === UNASSIGNED ? null : Number(v))}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="h-auto min-h-8 w-full py-1 [&_[data-slot=select-value]]:flex-col [&_[data-slot=select-value]]:items-start [&_[data-slot=select-value]]:gap-0"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1085,7 +1268,10 @@ function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; i
                     <SelectItem key={s.id} value={String(s.id)}>
                       <span className="flex min-w-0 flex-col text-left leading-tight">
                         <span className="truncate">{s.name}</span>
-                        <span className="truncate text-xs text-muted-foreground">{s.email}</span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {s.email}
+                          {s.phone ? ` · ${s.phone}` : ''}
+                        </span>
                       </span>
                     </SelectItem>
                   ))}
@@ -1151,16 +1337,46 @@ function DetailsCard({ ticket: t, isStaff, onUpdate, busy }: { ticket: Ticket; i
           <div className="truncate">{t.creator_name ?? '-'}</div>
           {isStaff && t.creator_email && <div className="truncate text-xs text-muted-foreground">{t.creator_email}</div>}
         </DetailRow>
+        {t.site_code && (
+          <DetailRow label="Site">
+            <div className="truncate font-medium">{t.site_code}</div>
+            {t.site_location && <div className="text-xs text-muted-foreground">{t.site_location}</div>}
+          </DetailRow>
+        )}
+        <SiteContact label="OM" name={t.om_name} phone={t.om_phone} />
+        <SiteContact label="FSE" name={t.fse_name} phone={t.fse_phone} />
         <Separator />
         <DetailRow label="Created">{formatDateTime(t.created_at)}</DetailRow>
         <DetailRow label="Last activity">{formatDateTime(t.last_activity_at)}</DetailRow>
         <DetailRow label="First response">
           <SlaBadge ticket={t} long />
         </DetailRow>
+        <DetailRow label="Resolution">
+          <ResolutionBadge ticket={t} long />
+        </DetailRow>
+        {t.resolved_at && (
+          <DetailRow label="Time to resolve">{duration((parseTs(t.resolved_at)!.getTime() - parseTs(t.created_at)!.getTime()) / 60000)}</DetailRow>
+        )}
+        {timeSpent > 0 && <DetailRow label="Work time logged">{duration(timeSpent)}</DetailRow>}
         {t.resolved_at && <DetailRow label="Resolved">{formatDateTime(t.resolved_at)}</DetailRow>}
         {!!t.escalated && t.escalated_at && <DetailRow label="Escalated">{formatDateTime(t.escalated_at)}</DetailRow>}
       </CardContent>
     </Card>
+  );
+}
+
+// The client's Operations Manager (OM) or Field Service Engineer (FSE) for the ticket's site.
+function SiteContact({ label, name, phone }: { label: string; name?: string | null; phone?: string | null }) {
+  if (!name && !phone) return null;
+  return (
+    <DetailRow label={label}>
+      <div className="truncate">{name ?? '-'}</div>
+      {phone && (
+        <a href={`tel:${phone.replace(/[^+\d]/g, '')}`} className="text-xs text-primary hover:underline">
+          {phone}
+        </a>
+      )}
+    </DetailRow>
   );
 }
 

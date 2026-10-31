@@ -13,6 +13,10 @@ import {
   LogOut,
   ALargeSmall,
   FileChartColumn,
+  HardHat,
+  House,
+  MapPin,
+  ChartColumn,
   Compass,
   Mail,
   MessageSquareText,
@@ -115,9 +119,16 @@ export function AppSidebar() {
         { label: 'Resolved', icon: CircleCheck, to: '/tickets', view: 'resolved' },
       ];
 
+  const clientNav: NavItem[] = [
+    { label: 'Home', icon: House, to: '/home' },
+    { label: 'Sites', icon: MapPin, to: '/sites' },
+    { label: 'Performance', icon: ChartColumn, to: '/performance' },
+  ];
+
   const workNav: NavItem[] = [
     { label: 'Site visits', icon: CalendarClock, to: '/visits' },
     { label: 'Saved replies', icon: MessageSquareText, to: '/saved-replies' },
+    { label: 'Technicians', icon: HardHat, to: '/technicians' },
   ];
 
   const adminNav: NavItem[] = [
@@ -219,6 +230,15 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
+        {!isStaff && (
+          <SidebarGroup>
+            <SidebarGroupLabel>{user.company_name ?? 'Your company'}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>{renderItems(clientNav)}</SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
         <SidebarGroup>
           <SidebarGroupLabel>Tickets</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -254,7 +274,7 @@ export function AppSidebar() {
                   <UserAvatar name={user.name} userId={user.id} className="rounded-lg" />
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{user.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                    <span className="truncate text-xs text-muted-foreground">{user.role === 'client' && user.company_name ? user.company_name : user.email}</span>
                   </div>
                   <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>

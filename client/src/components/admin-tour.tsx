@@ -48,7 +48,7 @@ function duration(minutes: number) {
 
 function buildSteps(user: User, app: AppMeta | null): Step[] {
   const first = user.name.split(' ')[0];
-  const sla = app?.slaMinutes ?? { urgent: 60, high: 240, normal: 1440, low: 2880 };
+  const sla = app?.sla.defaults.response ?? { urgent: 60, high: 240, normal: 1440, low: 2880 };
   const upload = app?.upload ?? { maxMb: 10, maxFiles: 5 };
   const idle = app?.sessionIdleMinutes ?? 30;
 
@@ -89,8 +89,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Messages</B>: every chat you're part of, tickets and groups.</>,
               <><B>Dashboard</B>: the numbers.</>,
               <><B>Tickets</B>: quick views of the ticket queue, with live counts.</>,
-              <><B>Field and team</B>: site visits and saved replies.</>,
-              <><B>Administration</B>: companies, users, transcripts and system health.</>,
+              <><B>Field and team</B>: site visits, saved replies and the technicians contact list.</>,
+              <><B>Administration</B>: companies (with their sites and SLAs), reports, users, transcripts and system health.</>,
             ]}
           />
           <P>
@@ -113,10 +113,14 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
             items={[
               <><B>Admin</B> (you): everything. Tickets, all the admin pages, Actions, your Mail and the System page.</>,
               <><B>Agent</B>: our support staff. Same ticket tools as you, plus the dashboard, but no Mail, Actions or System.</>,
-              <><B>Technician</B>: like an agent, and the person we send out on site visits.</>,
-              <><B>Client</B>: people at our client companies. They only ever see their own company's tickets and chats, and never see internal notes.</>,
+              <><B>Technician</B>: our field engineers. For now they don't use the portal: they're kept on the <B>Technicians</B> contact list, and jobs reach them by WhatsApp or text.</>,
+              <><B>Client</B>: people at our client companies. They only ever see their own company's tickets and chats, and never see internal notes. They get a <B>Home</B> page (open tickets, visits, what's waiting on them), their <B>Sites</B>, and a <B>Performance</B> page with their SLA results. They confirm when an engineer arrives and sign the job completion certificate (JCC) on screen.</>,
             ]}
           />
+          <P>
+            Clients never see our engineers' names or phone numbers. Whoever handles a ticket shows to them as <B>DateHeight Support</B>, and
+            work updates as <B>DateHeight engineer</B>.
+          </P>
           <Tip>
             Admin accounts are special: only the portal owner can create admins or edit them. If you need someone promoted to
             admin, ask them.
@@ -145,8 +149,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
             status and priority, and click any row to open it.
           </P>
           <P>
-            Keep an eye on the <B>Response SLA</B> column. It counts down to the time we promised to respond by, and turns red
-            when we're late.
+            Keep an eye on the two SLA columns. <B>Response SLA</B> counts down to the time we promised to reply by, and
+            <B> Resolution SLA</B> to the time we promised to fix it by. Both turn red when we're late.
           </P>
         </>
       ),
@@ -165,7 +169,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Closed</B>: finished, but only after <B>sign-off</B>. When anyone marks a ticket resolved, the other admins get an email asking them to check it. Once two of them approve, it closes. Anyone can send it back with a reason instead.</>,
             ]}
           />
-          <P>Priority decides how fast we've promised to respond (our SLA):</P>
+          <P>Priority decides how fast we've promised to respond (our default SLA):</P>
           <List
             items={[
               <><B>Urgent</B>: within {duration(sla.urgent)}</>,
@@ -174,6 +178,15 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Low</B>: within {duration(sla.low)}</>,
             ]}
           />
+          <P>
+            Both clocks start when the ticket is <B>assigned</B>, so assign new tickets promptly. Clients can request escalation
+            only once the time to resolve has passed without a fix, and only our team can mark a ticket resolved.
+          </P>
+          <P>
+            There's also a <B>time to resolve</B> for each priority. Admins set the defaults on the System page, and a company with
+            its own contract can have its own times and <B>fault categories</B> (Pan African Towers does: each fault, like ATS or
+            Metering, has its own priority and time to resolve).
+          </P>
           <Tip>
             If a client replies to a resolved ticket, it springs back to life, so nothing gets lost. Sign-offs waiting on you show up in
             your Actions list, and you can't sign off a ticket you resolved yourself.
@@ -195,7 +208,9 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Saved replies</B>: drop in a ready-made answer instead of typing it out again.</>,
               <><B>Edit</B> your own messages if you made a typo. Everyone will see it was edited.</>,
               <>Little <B>Seen</B> markers show when the other side has read your message.</>,
-              <>In the details panel, change the <B>status</B>, <B>priority</B>, <B>category</B> and <B>assignee</B>.</>,
+              <>In the details panel, change the <B>status</B>, <B>priority</B>, <B>category</B> and <B>assignee</B>. It also shows the site, the client's OM and FSE, and both SLA clocks.</>,
+              <><B>Message engineer</B>: drafts a job message from the ticket (site, fault, OM and FSE, resolve-by time). Pick a technician and send it by WhatsApp or text, or copy it. The ticket records who it went to.</>,
+              <><B>Work update</B>: record what was done, the time spent, and up to 40 before and after photos. The client sees it from "DateHeight engineer". Tick <B>mark resolved</B> to finish in one go.</>,
               <><B>Escalate</B> with a reason when something needs more attention, and de-escalate when it's under control.</>,
               <><B>Schedule a site visit</B> when someone needs to go on site.</>,
               <><B>Download the conversation</B> (HTML, text or JSON, with or without internal notes), or save a transcript to the archive.</>,
@@ -218,8 +233,10 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
           <List
             items={[
               <>Pick the <B>company</B> and then the <B>requester</B> (the person at that company it's for).</>,
+              <>Choose the <B>Site ID</B> from the company's site list. Type to search; companies can have hundreds of sites.</>,
+              <>For Pan African Towers, the <B>OM</B> and <B>FSE</B> (name and phone) are required, and the <B>fault category</B> sets the priority and the time to resolve.</>,
               <>Give it a short, clear <B>subject</B>, and the full story in the details: what happened, what they expected, steps to reproduce.</>,
-              <>Set the <B>category</B> and <B>priority</B>. Priority starts the SLA clock, so be honest with it.</>,
+              <>Otherwise set the <B>category</B> and <B>priority</B>. Priority starts the SLA clock, so be honest with it.</>,
               <>Attach screenshots or documents if you have them.</>,
             ]}
           />
@@ -240,7 +257,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               ) : (
                 <><B>Reply by email is off</B> right now, so clients need to reply from the portal. Its status is on the System page.</>
               ),
-              <>When a ticket is resolved, the client gets a quick star rating request. Those ratings show up on the dashboard.</>,
+              <>When a ticket is resolved, the client gets a quick star rating request, and can also rate each admin who handled the job. You're told when you're rated, and every admin hears about a low score.</>,
               <>New accounts get a welcome email with a link to set their password.</>,
               <>Unread chat messages get rounded up into a summary email after a short while, so nobody misses anything.</>,
             ]}
@@ -267,6 +284,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Start a group with <B>New group</B>, then add people, rename it, or leave it from the members list.</>,
               <>Use the search box to find any conversation, or any message inside one.</>,
               <>Unread chats show a count in the sidebar, and messages appear live.</>,
+              <>Your messages sit on the right, everyone else's on the left. Scrolled up to read? A button takes you back to the latest.</>,
             ]}
           />
         </>
@@ -313,7 +331,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
           </P>
           <Tip>
             You'll be reminded in three ways: an email straight away for urgent items, the red and orange badge on Actions in the
-            sidebar, and a daily summary email each morning.
+            sidebar, and a daily summary email each morning. You choose how often the bell reminds you about each kind of SLA
+            breach (due soon or overdue, for response and for resolution) under <B>SLA reminders</B> on your Profile.
           </Tip>
         </>
       ),
@@ -370,7 +389,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Raised vs resolved</B> over time. If the raised line keeps beating resolved, the queue is growing.</>,
               <>Breakdowns by priority and category, plus the <B>top companies</B> by ticket count.</>,
               <><B>SLA compliance</B>: how often we responded on time.</>,
-              <><B>Customer satisfaction</B> from star ratings, with the latest feedback.</>,
+              <><B>Customer satisfaction</B> from star ratings, with the latest feedback, and how clients rated each admin's handling of their jobs.</>,
               <><B>Team workload</B>: who's carrying what.</>,
               <>Recent activity and the most recently updated tickets.</>,
             ]}
@@ -391,7 +410,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
           <P>When something needs fixing in person, we book a site visit. Here's how they work:</P>
           <List
             items={[
-              <>Schedule a visit from the ticket's page. Pick a technician, a time and a location, and the client is notified.</>,
+              <>Schedule a visit from the ticket's page. Pick a technician, the date on the calendar and the time, and a location. The client is notified.</>,
               <>On the day, the technician hits <B>Start visit</B>, and <B>Complete visit</B> when they're done.</>,
               <>The visit report covers what they found and did, parts used, any follow-up, photos, and the client's name and signature to sign off.</>,
               <>Cancelling a visit lets the client know too.</>,
@@ -421,6 +440,25 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
       ),
     },
     {
+      title: 'Technicians',
+      route: '/technicians',
+      target: 'nav-technicians',
+      body: (
+        <>
+          <P>Our field technicians' names and numbers. They don't sign in to the portal; this is the list we send jobs to.</P>
+          <List
+            items={[
+              <>Add technicians one at a time, or <B>Paste list</B> straight from a spreadsheet (name, phone, area, notes).</>,
+              <>Tap a number to call, or the WhatsApp icon to chat.</>,
+              <>Mark someone <B>inactive</B> to stop offering them for jobs without losing their details.</>,
+              <>Agents can see the list; only admins can change it. Clients never see it.</>,
+            ]}
+          />
+          <Tip>Use <B>Message engineer</B> on a ticket to send a technician the job.</Tip>
+        </>
+      ),
+    },
+    {
       title: 'Companies',
       route: '/companies',
       target: 'nav-companies',
@@ -435,6 +473,11 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Keep <B>internal notes</B> on a company: contract details, quirks, who to call. Clients never see these.</>,
               <>See each company's open and total tickets and how many users they have.</>,
               <>Disable a company to cut off access for everyone there at once, and re-enable it any time.</>,
+              <><B>Edit SLA</B> sets a company's own response and resolution times, and its fault categories.</>,
+              <><B>Sites</B>: each company's site IDs, locations and details. Add them one by one or paste a whole list. Clients pick the site when they log a ticket.</>,
+              <>Turn on <B>Ask for OM and FSE</B> (in Edit company) to make every ticket for that company carry the site's Operations Manager and Field Service Engineer.</>,
+              <><B>Monthly statement</B>: choose which of the company's people get last month's figures by email on the 1st, or send it now.</>,
+              <>In <B>Edit SLA</B>, each fault category can carry a <B>template</B> (what the client should describe) and a number of <B>required photos</B>.</>,
             ]}
           />
         </>
@@ -453,7 +496,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
           <List
             items={[
               <>Tickets raised, resolved and still open, with the trend over time.</>,
-              <>How fast we responded and resolved, and how often we hit our response promise.</>,
+              <>How fast we responded and resolved, and how often we hit our response and resolution promises.</>,
               <>Satisfaction scores and what the client actually said.</>,
               <>Breakdowns by priority, category, who raised what, and who on our team handled it.</>,
               <>Site visits, their people (with positions), and every ticket in the period.</>,
@@ -510,6 +553,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
           <List
             items={[
               <><B>Email outbox</B>: every email the portal sends goes through here. If one fails (say the internet blips), it's retried automatically for hours. You can also requeue failed ones by hand.</>,
+              <><B>Default SLA times</B>: the response and resolution times for each priority, used by every company without its own.</>,
+              <><B>Escalation rules</B>: when tickets escalate on their own (no first reply in time, past the time to resolve, or gone quiet), to which level, who is alerted, and whether to raise the priority or assign it.</>,
               <><B>Backups</B>: the whole portal is backed up every night. You can see recent backups and run one now.</>,
               <><B>Automatic housekeeping</B>: auto-close for resolved tickets, the unread message summary emails, and the inactivity sign-out.</>,
               <><B>Reply by email</B> and <B>outgoing email</B> status, so you can see straight away whether mail is flowing.</>,
@@ -530,9 +575,10 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
             items={[
               <>Pick an <B>avatar</B>. There are 60 to choose from, or stick with your initials.</>,
               <>Set your <B>email signature</B>. It goes on ticket replies and emails from your mailbox.</>,
+              <>Choose your <B>SLA reminders</B>: how often you're reminded about tickets at risk, and whether by email too.</>,
               <>Pick a <B>text size</B> that suits you: smaller fits more on screen, larger is easier on the eyes.</>,
               <>Add your <B>phone number</B>, and decide whether you want <B>email notifications</B>.</>,
-              <>Change your <B>password</B>. It needs to be a strong one, and the checklist tells you what's missing.</>,
+              <>Change your <B>password</B>: we email you a one-time code to confirm it's you. It needs to be a strong one, and the checklist tells you what's missing.</>,
             ]}
           />
           <P>Light or dark mode lives in the same menu as your name, under <B>Theme</B>.</P>

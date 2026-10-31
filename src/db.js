@@ -98,6 +98,12 @@ async function init() {
       console.log(`[db] added index ${name}`);
     }
   }
+  // Notes about how the team works a ticket used to be visible to clients; keep them staff-only.
+  await impl.exec(
+    `UPDATE messages SET is_internal = 1 WHERE kind = 'system' AND is_internal = 0 AND (body LIKE 'Assigned to %' OR body = 'Ticket unassigned.'
+      OR body LIKE 'Priority changed from %' OR body LIKE 'Category changed to %' OR body = 'Escalation cleared.'
+      OR body LIKE 'Escalated to level %' OR body LIKE 'Picked up by %')`
+  );
   await optimize();
 }
 

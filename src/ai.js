@@ -170,7 +170,7 @@ async function analyseTicket(ticketId, { force = false, user = null } = {}) {
   if (!t) throw new Error('Ticket not found');
   const data = await gather(t);
   const engine = provider();
-  if (engine === 'builtin') return { insight: await builtinInsight(t, data, user), cached: false };
+  if (engine === 'builtin') return { insight: { ...(await builtinInsight(t, data, user)), created_at: now() }, cached: false };
 
   const lastId = data.messages.length ? data.messages[data.messages.length - 1].id : 0;
   const stored = await db.one('SELECT * FROM ai_insights WHERE ticket_id = ?', [t.id]);

@@ -32,14 +32,25 @@ const upload = multer({
 });
 
 // Largest request an upload may be: every allowed file at full size plus room for the form fields.
+const WORK_UPDATE = /^\/tickets\/\d+\/work-updates$/;
 const maxRequestBytes = (req) =>
-  (req.path === '/mail/send' ? config.mailUpload.maxTotalMb + 1 : config.upload.maxMb * config.upload.maxFiles + 1) * 1024 * 1024;
+  (req.path === '/mail/send'
+    ? config.mailUpload.maxTotalMb + 1
+    : WORK_UPDATE.test(req.path)
+      ? config.workUpload.maxTotalMb + 1
+      : config.upload.maxMb * config.upload.maxFiles + 1) *
+  1024 *
+  1024;
 function limitRequestSize(req, res, next) {
   const declared = Number(req.headers['content-length'] || 0);
   if (declared > maxRequestBytes(req)) {
     if (req.path === '/mail/send') {
       req.resume();
       return next(new HttpError(413, `Attachments are too large. An email can carry up to ${config.mailUpload.maxTotalMb} MB in total.`));
+    }
+    if (WORK_UPDATE.test(req.path)) {
+      req.resume();
+      return next(new HttpError(413, `Photos are too large. A work update can carry up to ${config.workUpload.maxTotalMb} MB in total.`));
     }
     req.resume();
     return next(new HttpError(413, `Upload too large. Attach up to ${config.upload.maxFiles} files of ${config.upload.maxMb} MB each.`));
@@ -61,8 +72,22 @@ const mailUpload = multer({
   },
 });
 
+// Work update photos: more files per update than ordinary attachments.
+const workUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex')),
+  }),
+  limits: { fileSize: config.workUpload.maxMb * 1024 * 1024, files: config.workUpload.maxFiles },
+  fileFilter(req, file, cb) {
+    file.originalname = fixName(file.originalname).slice(0, 200);
+    if (BLOCKED.test(file.originalname)) return cb(new HttpError(400, `File type not allowed: ${file.originalname}`));
+    cb(null, true);
+  },
+});
+
 function cleanup(files = []) {
   for (const f of files) fs.unlink(f.path, () => {});
 }
 
-module.exports = { upload, mailUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir };
+module.exports = { upload, mailUpload, workUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir };

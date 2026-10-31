@@ -1,6 +1,7 @@
 // Company reports for admins: everything about one client company over a period, for reviews and account meetings.
 const router = require('express').Router();
 const config = require('../config');
+const sla = require('../sla');
 const db = require('../db');
 const { requireAdmin } = require('../auth');
 const { wrap, now, parseTs, HttpError, OPEN_STATUSES, PRIORITIES } = require('../util');
@@ -31,10 +32,10 @@ router.get(
     const cid = company.id;
     const openIn = db.inList(OPEN_STATUSES);
 
-    const [tickets, openNow, people, ratings, visits, messages, chats] = await Promise.all([
+    const [tickets, openNow, people, ratings, visits, messages, chats, adminRatings] = await Promise.all([
       // Every ticket raised in the period, with who raised and handled it.
       db.query(
-        `SELECT t.id, t.subject, t.category, t.priority, t.status, t.escalated, t.created_at, t.first_response_at, t.resolved_at,
+        `SELECT t.id, t.subject, t.category, t.priority, t.status, t.escalated, t.created_at, t.assigned_at, t.first_response_at, t.resolved_at,
           t.last_activity_at, t.assigned_to, cu.name AS requester, cu.email AS requester_email, cu.job_title AS requester_title, au.name AS assignee
          FROM tickets t LEFT JOIN users cu ON cu.id = t.created_by LEFT JOIN users au ON au.id = t.assigned_to
          WHERE t.company_id = ? AND t.created_at >= ? AND t.created_at < ? ORDER BY t.created_at DESC`,
@@ -72,6 +73,12 @@ router.get(
          WHERE g.company_id = ?`,
         [since, until, cid]
       ),
+      // How this company's people rated each of our admins.
+      db.query(
+        `SELECT r.admin_id, u.name, COUNT(*) AS n, AVG(r.rating) AS avg FROM admin_ratings r JOIN tickets t ON t.id = r.ticket_id JOIN users u ON u.id = r.admin_id
+         WHERE t.company_id = ? AND r.updated_at >= ? AND r.updated_at < ? GROUP BY r.admin_id, u.name ORDER BY avg DESC`,
+        [cid, since, until]
+      ),
     ]);
     // Resolved in the period, whenever they were raised.
     const resolved = await db.query(
@@ -93,14 +100,7 @@ router.get(
     const nowTs = now();
     const firstResponse = tickets.filter((t) => t.first_response_at).map((t) => minutesBetween(t.created_at, t.first_response_at));
     const resolution = resolved.map((t) => minutesBetween(t.created_at, t.resolved_at));
-    let slaMet = 0;
-    let slaMissed = 0;
-    for (const t of tickets) {
-      const limit = config.slaMinutes[t.priority] || config.slaMinutes.normal;
-      const waited = minutesBetween(t.created_at, t.first_response_at || nowTs);
-      if (t.first_response_at && waited <= limit) slaMet++;
-      else if (waited > limit) slaMissed++;
-    }
+    const { slaMet, slaMissed, resolutionMet, resolutionMissed } = sla.tally(tickets, cid);
 
     // Who at the company raised what, and who on our side handled it.
     const byRequester = ranked(countBy(tickets.filter((t) => t.requester), 'requester')).slice(0, 10);
@@ -139,6 +139,11 @@ router.get(
         slaMet,
         slaMissed,
         slaPct: slaMet + slaMissed ? Math.round((slaMet / (slaMet + slaMissed)) * 100) : null,
+        resolutionMet,
+        resolutionMissed,
+        resolutionPct: resolutionMet + resolutionMissed ? Math.round((resolutionMet / (resolutionMet + resolutionMissed)) * 100) : null,
+        // The targets this company is held to.
+        sla: sla.forCompany(cid),
         ratings: ratings.length,
         avgRating: avg(ratings.map((r) => Number(r.rating))),
         csatPct: ratings.length ? Math.round((ratings.filter((r) => Number(r.rating) >= 4).length / ratings.length) * 100) : null,
@@ -160,6 +165,7 @@ router.get(
         .map((h) => ({ name: h.name, tickets: h.tickets, resolved: h.resolved, ratings: h.ratings.length, avgRating: avg(h.ratings) }))
         .sort((a, b) => b.tickets - a.tickets),
       ratingBreakdown: [1, 2, 3, 4, 5].map((n) => ({ rating: n, total: ratings.filter((r) => Number(r.rating) === n).length })),
+      adminRatings: adminRatings.map((r) => ({ name: r.name, ratings: Number(r.n), avgRating: Math.round(Number(r.avg) * 10) / 10 })),
       ratings: ratings.slice(0, 50),
       openNow: openNow.map((t) => ({ ...t, ageDays: ageDays(t.created_at) })),
       visits,

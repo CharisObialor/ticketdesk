@@ -7,6 +7,8 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PageHeader } from '@/components/common';
+import { DefaultSlaCard } from '@/components/sla-editor';
+import { EscalationRulesCard } from '@/components/escalation-rules';
 import { api, errorMessage } from '@/lib/api';
 import { fileSize, timeAgo } from '@/lib/format';
 
@@ -93,6 +95,9 @@ export default function SystemPage() {
           }
         />
       </div>
+
+      <DefaultSlaCard />
+      <EscalationRulesCard />
 
       <Card>
         <CardHeader>

@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { useSession } from '@/hooks/use-session';
 import { cn } from '@/lib/utils';
 import { PRIORITY_LABELS, STATUS_LABELS, duration } from '@/lib/format';
-import { slaState, useNow } from '@/lib/sla';
+import { resolutionState, slaState, useNow } from '@/lib/sla';
 import type { Priority, Status, Ticket } from '@/lib/types';
 
 const STATUS_DOT: Record<Status, string> = {
@@ -44,8 +44,9 @@ export function PriorityBadge({ priority, className }: { priority: Priority; cla
 export function SlaBadge({ ticket, className, long = false }: { ticket: Ticket; className?: string; long?: boolean }) {
   const { app } = useSession();
   const nowMs = useNow();
-  const s = slaState(ticket, app?.slaMinutes, nowMs);
+  const s = slaState(ticket, app?.sla, nowMs);
   if (s.kind === 'none') return <span className={cn('text-xs text-muted-foreground', className)}>-</span>;
+  if (s.kind === 'pending') return <span className={cn('text-xs text-muted-foreground', className)}>{long ? 'Starts when assigned' : 'Not started'}</span>;
   if (s.kind === 'met') {
     return (
       <span className={cn('inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400', className)} title={`First response in ${duration(s.minutes)}`}>
@@ -66,6 +67,39 @@ export function SlaBadge({ ticket, className, long = false }: { ticket: Ticket; 
     <span className={cn('inline-flex items-center gap-1 text-xs', s.fraction < 0.25 ? 'font-medium text-orange-600 dark:text-orange-400' : 'text-muted-foreground', className)}>
       <Timer className="size-3.5" />
       {long ? `Respond within ${duration(s.minutesLeft)}` : `${duration(s.minutesLeft)} left`}
+    </span>
+  );
+}
+
+// Resolution SLA (time to resolve) from the company's targets or the ticket's fault category.
+export function ResolutionBadge({ ticket, className, long = false }: { ticket: Ticket; className?: string; long?: boolean }) {
+  const { app } = useSession();
+  const nowMs = useNow();
+  const s = resolutionState(ticket, app?.sla, nowMs);
+  const target = s.limit ? `Target: resolve within ${duration(s.limit)}` : undefined;
+  if (s.kind === 'none') return <span className={cn('text-xs text-muted-foreground', className)}>-</span>;
+  if (s.kind === 'pending') return <span className={cn('text-xs text-muted-foreground', className)} title={target}>{long ? 'Starts when assigned' : 'Not started'}</span>;
+  if (s.kind === 'met') {
+    return (
+      <span className={cn('inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400', className)} title={target}>
+        <CircleCheck className="size-3.5" />
+        {long ? `Resolved in ${duration(s.minutes)}, within target` : 'Met'}
+      </span>
+    );
+  }
+  if (s.kind === 'overdue') {
+    const done = !!ticket.resolved_at;
+    return (
+      <span className={cn('inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400', className)} title={target}>
+        <Timer className="size-3.5" />
+        {long ? (done ? `Resolved ${duration(s.minutesOver)} past target` : `Resolution overdue by ${duration(s.minutesOver)}`) : `${duration(s.minutesOver)} over`}
+      </span>
+    );
+  }
+  return (
+    <span className={cn('inline-flex items-center gap-1 text-xs', s.fraction < 0.2 ? 'font-medium text-orange-600 dark:text-orange-400' : 'text-muted-foreground', className)} title={target}>
+      <Timer className="size-3.5" />
+      {long ? `Resolve within ${duration(s.minutesLeft)}` : `${duration(s.minutesLeft)} left`}
     </span>
   );
 }

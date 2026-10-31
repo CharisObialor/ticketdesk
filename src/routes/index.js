@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const config = require('../config');
-const { authenticate } = require('../auth');
+const { authenticate, csrfCheck } = require('../auth');
 const { HttpError } = require('../util');
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -42,6 +42,9 @@ const adminOnlyPaths = (pattern, inner) => (req, res, next) => (pattern.test(req
 
 router.use(sameOrigin);
 router.use(authenticate);
+router.use(csrfCheck);
+// Clients never see our engineers' names or numbers.
+router.use(require('../privacy').clientResponses);
 router.use(apiLimiter);
 router.use('/auth', require('./auth'));
 router.use(adminOnlyPaths(/^\/(actions|tickets\/\d+\/ai)(\/|$)/, require('./actions')));
@@ -53,6 +56,7 @@ router.use('/mail', require('./mail'));
 router.use(require('./files'));
 router.use(require('./admin'));
 router.use(require('./extras'));
+router.use(require('./client'));
 router.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 module.exports = router;

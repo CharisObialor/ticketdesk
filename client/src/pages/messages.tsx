@@ -38,6 +38,17 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
 import { StatusBadge } from '@/components/ticket-badges';
 import { useRealtime, type GroupData } from '@/hooks/use-realtime';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
@@ -47,6 +58,7 @@ import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo 
 import { cn } from '@/lib/utils';
 import type { ChatItem, ChatMessage, Company, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
+import { basename } from '@/lib/url-key';
 
 type Filter = 'all' | 'group' | 'ticket';
 
@@ -241,7 +253,7 @@ function ConversationRow({ item: i, active }: { item: ChatItem; active: boolean 
             </Link>
           </ContextMenuItem>
         )}
-        <ContextMenuItem onClick={() => window.open(`/messages/${i.type}/${i.id}`, '_blank', 'noopener')}>
+        <ContextMenuItem onClick={() => window.open(`${basename ?? ''}/messages/${i.type}/${i.id}`, '_blank', 'noopener')}>
           <ExternalLink />
           Open in new tab
         </ContextMenuItem>
@@ -325,7 +337,6 @@ function GroupPane({ groupId }: { groupId: number }) {
   const { user } = useSession();
   const { groupTypingFor } = useRealtime();
   const [showMembers, setShowMembers] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
   const query = useQuery({
     queryKey: ['group', groupId],
     queryFn: () => api.get<GroupData>(`/chats/groups/${groupId}`),
@@ -343,10 +354,6 @@ function GroupPane({ groupId }: { groupId: number }) {
       () => {}
     );
   }, [groupId, isMember, messages.length, qc]);
-
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: 'nearest' });
-  }, [messages.length, typing.length]);
 
   if (query.isPending) return <PaneSkeleton />;
   if (query.isError) {
@@ -376,18 +383,31 @@ function GroupPane({ groupId }: { groupId: number }) {
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
-        {messages.map((m, i) => (
-          <ChatBubble key={m.id} message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} />
-        ))}
-        {typing.length > 0 && (
-          <div className="flex items-center gap-2 pt-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" />
-            {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
-          </div>
-        )}
-        <div ref={end} />
-      </div>
+      {/* shadcn chat layout: opens at the newest message, follows new ones while you are at the bottom. */}
+      <MessageScrollerProvider key={groupId} autoScroll defaultScrollPosition="end">
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport>
+            <MessageScrollerContent className="gap-1 px-4 py-4">
+              {messages.map((m, i) => (
+                <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
+                  <ChatBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} />
+                </MessageScrollerItem>
+              ))}
+              {typing.length > 0 && (
+                <Marker className="pt-2 text-xs">
+                  <MarkerIcon>
+                    <Loader2 className="size-3 animate-spin" />
+                  </MarkerIcon>
+                  <MarkerContent>
+                    {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
+                  </MarkerContent>
+                </Marker>
+              )}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+        </MessageScroller>
+      </MessageScrollerProvider>
       {!isMember && (
         <div className="px-4 pt-3">
           <Alert>
@@ -431,21 +451,21 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
   });
   if (m.kind === 'system') {
     return (
-      <div className="flex justify-center py-2">
-        <span className="rounded-full bg-muted px-3 py-1 text-center text-xs text-muted-foreground" title={formatDateTime(m.created_at)}>
-          {m.body}
-        </span>
-      </div>
+      <Marker variant="separator" className="py-2 text-xs" title={formatDateTime(m.created_at)}>
+        <MarkerContent>{m.body}</MarkerContent>
+      </Marker>
     );
   }
   const grouped = sameBlock(prev, m);
   const staff = isStaffRole(m.user_role);
   return (
-    <div className={cn('flex gap-2', own && 'flex-row-reverse', !grouped && 'pt-3')}>
-      <div className="w-8 shrink-0">{!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} />}</div>
-      <div className={cn('flex max-w-[75%] min-w-0 flex-col gap-1', own && 'items-end')}>
+    <UiMessage align={own ? 'end' : 'start'} className={cn(!grouped && 'pt-3')}>
+      <MessageAvatar className={cn('self-start', (grouped || own) && 'invisible')}>
+        {!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} />}
+      </MessageAvatar>
+      <MessageContent className="max-w-[75%] gap-1">
         {!grouped && (
-          <div className={cn('flex items-center gap-2 text-xs', own && 'flex-row-reverse')}>
+          <MessageHeader className={cn('gap-2 px-0 font-normal text-foreground', own && 'flex-row-reverse')}>
             <span className="font-medium">{own ? 'You' : (m.user_name ?? 'Deleted user')}</span>
             {staff && !own && (
               <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
@@ -455,7 +475,7 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
             <span className="text-muted-foreground" title={formatDateTime(m.created_at)}>
               {formatTime(m.created_at)}
             </span>
-          </div>
+          </MessageHeader>
         )}
         {editing ? (
           <div className="w-72 max-w-full">
@@ -463,14 +483,9 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
           </div>
         ) : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            <div
-              className={cn(
-                'rounded-2xl px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap',
-                own ? 'rounded-tr-sm bg-primary text-primary-foreground' : 'rounded-tl-sm bg-muted'
-              )}
-            >
-              {m.body}
-            </div>
+            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
+              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+            </Bubble>
             {own && (
               <Button
                 variant="ghost"
@@ -491,13 +506,13 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
         )}
         {m.attachments.length > 0 && <Attachments items={m.attachments} base="/api/chats/files" />}
         {seenBy && seenBy.length > 0 && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
             Seen by {seenBy.join(', ')}
-          </span>
+          </MessageFooter>
         )}
-      </div>
-    </div>
+      </MessageContent>
+    </UiMessage>
   );
 }
 
@@ -947,7 +962,7 @@ function TicketPane({ ticketId }: { ticketId: number }) {
           </>
         }
       />
-      <Thread ticket={t} messages={messages} isStaff={isStaff} reads={query.data.reads} className="max-h-none min-h-0 flex-1" />
+      <Thread ticket={t} messages={messages} isStaff={isStaff} reads={query.data.reads} fill />
       <Separator />
       {t.status === 'closed' && !isStaff ? (
         <div className="p-4">

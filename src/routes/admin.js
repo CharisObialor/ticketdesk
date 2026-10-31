@@ -7,8 +7,9 @@ const config = require('../config');
 const hasher = require('../hasher');
 const db = require('../db');
 const notify = require('../notify');
+const sla = require('../sla');
 const { checkPassword } = require('../password');
-const { requireStaff, requireAdmin, publicUser, makeToken, isOwner, ROLES, STAFF_ROLES } = require('../auth');
+const { requireAuth, requireStaff, requireAdmin, publicUser, makeToken, isOwner, ROLES, STAFF_ROLES } = require('../auth');
 
 const OWNER_ONLY = 'Only the account owner can create or change admin accounts.';
 const { wrap, now, HttpError, OPEN_STATUSES } = require('../util');
@@ -20,7 +21,7 @@ router.get(
   '/staff',
   requireStaff,
   wrap(async (req, res) => {
-    const rows = await db.query(`SELECT id, name, email, role FROM users WHERE role IN (${db.inList(STAFF_ROLES)}) AND is_active = 1 ORDER BY name`, STAFF_ROLES);
+    const rows = await db.query(`SELECT id, name, email, role, phone FROM users WHERE role IN (${db.inList(STAFF_ROLES)}) AND is_active = 1 ORDER BY name`, STAFF_ROLES);
     res.json({ staff: rows });
   })
 );
@@ -48,7 +49,14 @@ router.get(
       if (!byCompany.has(p.company_id)) byCompany.set(p.company_id, []);
       byCompany.get(p.company_id).push({ ...p, is_active: !!p.is_active });
     }
-    res.json({ companies: rows.map((c) => ({ ...withLogoUrl(c), contacts: byCompany.get(c.id) || [] })) });
+    res.json({
+      companies: rows.map(({ sla: _own, statement_recipients: recipients, ...c }) => ({
+        ...withLogoUrl(c),
+        sla: sla.own(c.id),
+        statement_recipients: require('../statement').parseIds(recipients),
+        contacts: byCompany.get(c.id) || [],
+      })),
+    });
   })
 );
 
@@ -71,6 +79,7 @@ function companyFields(b, existing = {}) {
     email_domain: clean(b.email_domain ?? existing.email_domain, 190).toLowerCase().replace(/^@/, '') || null,
     notes: clean(b.notes ?? existing.notes, 2000) || null,
     rc_number: b.rc_number !== undefined ? rcNumber(b.rc_number) : existing.rc_number ?? null,
+    site_contacts: b.site_contacts === undefined ? Number(existing.site_contacts) || 0 : b.site_contacts ? 1 : 0,
     is_active: b.is_active === undefined ? existing.is_active ?? 1 : !!b.is_active,
   };
 }
@@ -80,15 +89,17 @@ router.post(
   requireAdmin,
   wrap(async (req, res) => {
     const f = companyFields(req.body);
-    const r = await db.query('INSERT INTO companies (name, email_domain, notes, rc_number, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?)', [
+    const r = await db.query('INSERT INTO companies (name, email_domain, notes, rc_number, site_contacts, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
       f.name,
       f.email_domain,
       f.notes,
       f.rc_number,
+      f.site_contacts,
       f.is_active,
       now(),
     ]);
-    res.status(201).json({ company: { id: r.insertId, ...f } });
+    const own = req.body.sla !== undefined ? await sla.setCompany(r.insertId, req.body.sla) : null;
+    res.status(201).json({ company: { id: r.insertId, ...f, sla: own } });
   })
 );
 
@@ -99,15 +110,282 @@ router.patch(
     const existing = await db.one('SELECT * FROM companies WHERE id = ?', [Number(req.params.id)]);
     if (!existing) throw new HttpError(404, 'Company not found');
     const f = companyFields(req.body, existing);
-    await db.query('UPDATE companies SET name = ?, email_domain = ?, notes = ?, rc_number = ?, is_active = ? WHERE id = ?', [
+    await db.query('UPDATE companies SET name = ?, email_domain = ?, notes = ?, rc_number = ?, site_contacts = ?, is_active = ? WHERE id = ?', [
       f.name,
       f.email_domain,
       f.notes,
       f.rc_number,
+      f.site_contacts,
       f.is_active,
       existing.id,
     ]);
-    res.json({ company: withLogoUrl({ ...existing, ...f }) });
+    const own = req.body.sla !== undefined ? await sla.setCompany(existing.id, req.body.sla) : sla.own(existing.id);
+    const statement = require('../statement');
+    let recipients = statement.parseIds(existing.statement_recipients);
+    if (req.body.statement_recipients !== undefined) {
+      recipients = await statement.cleanRecipients(existing.id, req.body.statement_recipients);
+      await db.query('UPDATE companies SET statement_recipients = ? WHERE id = ?', [JSON.stringify(recipients), existing.id]);
+    }
+    res.json({ company: withLogoUrl({ ...existing, ...f, sla: own, statement_recipients: recipients }) });
+  })
+);
+
+// ---- Company sites ----
+// Each client company's sites (for example towers or substations): a site ID, where it is, and any details.
+
+function siteFields(b, existing = {}) {
+  // Spaces around slashes are typing slips (PAT/OYO/ 111 is PAT/OYO/111).
+  const code = clean(b.code ?? existing.code, 60).replace(/\s+/g, ' ').replace(/\s*\/\s*/g, '/');
+  if (!code) throw new HttpError(400, 'Site ID is required');
+  return {
+    code,
+    location: clean(b.location ?? existing.location, 255).replace(/\s+/g, ' ') || null,
+    details: clean(b.details ?? existing.details, 2000) || null,
+    is_active: b.is_active === undefined ? existing.is_active ?? 1 : b.is_active ? 1 : 0,
+  };
+}
+
+const siteCodeTaken = (companyId, code, exceptId = 0) =>
+  db.one('SELECT id FROM sites WHERE company_id = ? AND LOWER(code) = ? AND id <> ?', [companyId, code.toLowerCase(), exceptId]);
+
+const MAX_SITES_PER_ADD = 2000;
+
+// Staff see any company's sites; a client sees only their own company's active sites (for the new ticket form).
+router.get(
+  '/sites',
+  requireAuth,
+  wrap(async (req, res) => {
+    const staffUser = STAFF_ROLES.includes(req.user.role);
+    const companyId = staffUser ? Number(req.query.company_id) : req.user.company_id;
+    if (!companyId) return res.json({ sites: [] });
+    const all = staffUser && req.query.all === '1';
+    const rows = await db.query(
+      `SELECT s.id, s.company_id, s.code, s.location, s.details, s.is_active FROM sites s
+       WHERE s.company_id = ?${all ? '' : ' AND s.is_active = 1'} ORDER BY s.code`,
+      [companyId]
+    );
+    // How many tickets use each site (shown to admins when removing one), counted in one pass.
+    const counts = new Map();
+    if (all) {
+      const used = await db.query('SELECT site_id, COUNT(*) AS n FROM tickets WHERE site_id IN (SELECT id FROM sites WHERE company_id = ?) GROUP BY site_id', [companyId]);
+      for (const u of used) counts.set(Number(u.site_id), Number(u.n));
+    }
+    res.json({ sites: rows.map((s) => ({ ...s, is_active: !!Number(s.is_active), ticket_count: counts.get(Number(s.id)) || 0 })) });
+  })
+);
+
+// Adds one site, or many at once ({ sites: [...] }, for example pasted from a spreadsheet).
+router.post(
+  '/companies/:id/sites',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const company = await db.one('SELECT id FROM companies WHERE id = ?', [Number(req.params.id)]);
+    if (!company) throw new HttpError(404, 'Company not found');
+    const list = Array.isArray(req.body.sites) ? req.body.sites : [req.body];
+    if (!list.length) throw new HttpError(400, 'Add at least one site');
+    if (list.length > MAX_SITES_PER_ADD) throw new HttpError(400, `Add at most ${MAX_SITES_PER_ADD} sites at a time`);
+    const ts = now();
+    let added = 0;
+    const skipped = [];
+    for (const item of list) {
+      const f = siteFields(item || {});
+      if (await siteCodeTaken(company.id, f.code)) {
+        if (list.length === 1) throw new HttpError(409, `Site ID ${f.code} is already on the list`);
+        skipped.push(f.code);
+        continue;
+      }
+      await db.query('INSERT INTO sites (company_id, code, location, details, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+        company.id,
+        f.code,
+        f.location,
+        f.details,
+        f.is_active,
+        ts,
+        ts,
+      ]);
+      added++;
+    }
+    res.status(201).json({ added, skipped });
+  })
+);
+
+router.patch(
+  '/sites/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const existing = await db.one('SELECT * FROM sites WHERE id = ?', [Number(req.params.id)]);
+    if (!existing) throw new HttpError(404, 'Site not found');
+    const f = siteFields(req.body, existing);
+    if (await siteCodeTaken(existing.company_id, f.code, existing.id)) throw new HttpError(409, `Site ID ${f.code} is already on the list`);
+    await db.query('UPDATE sites SET code = ?, location = ?, details = ?, is_active = ?, updated_at = ? WHERE id = ?', [
+      f.code,
+      f.location,
+      f.details,
+      f.is_active,
+      now(),
+      existing.id,
+    ]);
+    res.json({ site: { ...existing, ...f, is_active: !!f.is_active } });
+  })
+);
+
+// Sites that tickets refer to are kept (marked inactive) so those tickets still show the site.
+router.delete(
+  '/sites/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const existing = await db.one('SELECT id FROM sites WHERE id = ?', [Number(req.params.id)]);
+    if (!existing) throw new HttpError(404, 'Site not found');
+    const used = await db.one('SELECT id FROM tickets WHERE site_id = ? LIMIT 1', [existing.id]);
+    if (used) await db.query('UPDATE sites SET is_active = 0, updated_at = ? WHERE id = ?', [now(), existing.id]);
+    else await db.query('DELETE FROM sites WHERE id = ?', [existing.id]);
+    res.json({ ok: true, archived: !!used });
+  })
+);
+
+// ---- Technicians ----
+// Field technicians' names and numbers for job messages. They are a contact list, not portal accounts.
+
+const cleanPhone = (v) => clean(v, 40).replace(/[^\d+ ()-]/g, '').trim();
+
+function technicianFields(b, existing = {}) {
+  const name = clean(b.name ?? existing.name, 120).replace(/\s+/g, ' ');
+  if (!name) throw new HttpError(400, 'Name is required');
+  const phone = b.phone !== undefined ? cleanPhone(b.phone) : existing.phone || '';
+  if (phone && phone.replace(/\D/g, '').length < 7) throw new HttpError(400, `Enter a valid phone number for ${name}`);
+  return {
+    name,
+    phone: phone || null,
+    area: clean(b.area ?? existing.area, 190).replace(/\s+/g, ' ') || null,
+    notes: clean(b.notes ?? existing.notes, 2000) || null,
+    is_active: b.is_active === undefined ? existing.is_active ?? 1 : b.is_active ? 1 : 0,
+  };
+}
+
+const MAX_TECHNICIANS_PER_ADD = 1000;
+
+router.get(
+  '/technicians',
+  requireStaff,
+  wrap(async (req, res) => {
+    const rows = await db.query('SELECT id, name, phone, area, notes, is_active FROM technicians ORDER BY is_active DESC, name');
+    res.json({ technicians: rows.map((t) => ({ ...t, is_active: !!Number(t.is_active) })) });
+  })
+);
+
+// Adds one technician, or many at once ({ technicians: [...] }, for example pasted from a spreadsheet).
+router.post(
+  '/technicians',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const list = Array.isArray(req.body.technicians) ? req.body.technicians : [req.body];
+    if (!list.length) throw new HttpError(400, 'Add at least one technician');
+    if (list.length > MAX_TECHNICIANS_PER_ADD) throw new HttpError(400, `Add at most ${MAX_TECHNICIANS_PER_ADD} at a time`);
+    const rows = list.map((item) => technicianFields(item || {}));
+    const ts = now();
+    let added = 0;
+    const skipped = [];
+    for (const f of rows) {
+      // The same name and number already on the list is a duplicate.
+      const same = await db.one('SELECT id FROM technicians WHERE LOWER(name) = ? AND COALESCE(phone, \'\') = ?', [f.name.toLowerCase(), f.phone || '']);
+      if (same) {
+        if (rows.length === 1) throw new HttpError(409, `${f.name} is already on the list`);
+        skipped.push(f.name);
+        continue;
+      }
+      await db.query('INSERT INTO technicians (name, phone, area, notes, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+        f.name,
+        f.phone,
+        f.area,
+        f.notes,
+        f.is_active,
+        ts,
+        ts,
+      ]);
+      added++;
+    }
+    res.status(201).json({ added, skipped });
+  })
+);
+
+router.patch(
+  '/technicians/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const existing = await db.one('SELECT * FROM technicians WHERE id = ?', [Number(req.params.id)]);
+    if (!existing) throw new HttpError(404, 'Technician not found');
+    const f = technicianFields(req.body, existing);
+    await db.query('UPDATE technicians SET name = ?, phone = ?, area = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?', [
+      f.name,
+      f.phone,
+      f.area,
+      f.notes,
+      f.is_active,
+      now(),
+      existing.id,
+    ]);
+    res.json({ technician: { id: existing.id, ...f, is_active: !!f.is_active } });
+  })
+);
+
+router.delete(
+  '/technicians/:id',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const r = await db.query('DELETE FROM technicians WHERE id = ?', [Number(req.params.id)]);
+    if (!r.affectedRows) throw new HttpError(404, 'Technician not found');
+    res.json({ ok: true });
+  })
+);
+
+// Sends last month's statement to the company's chosen contacts now (it also goes automatically on the 1st).
+router.post(
+  '/companies/:id/statement',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const company = await db.one('SELECT * FROM companies WHERE id = ?', [Number(req.params.id)]);
+    if (!company) throw new HttpError(404, 'Company not found');
+    const sent = await require('../statement').sendFor(company);
+    if (!sent) throw new HttpError(400, 'Choose who receives the statement first');
+    res.json({ sent });
+  })
+);
+
+// ---- SLA targets ----
+
+// The default response and resolution times for each priority; companies without their own targets use these.
+router.get(
+  '/sla',
+  requireStaff,
+  wrap(async (req, res) => {
+    res.json({ defaults: sla.forCompany(null), builtIn: sla.BUILT_IN });
+  })
+);
+
+router.put(
+  '/sla',
+  requireAdmin,
+  wrap(async (req, res) => {
+    res.json({ defaults: await sla.setDefaults(req.body) });
+  })
+);
+
+// ---- Escalation rules ----
+
+router.get(
+  '/escalation',
+  requireStaff,
+  wrap(async (req, res) => {
+    const escalation = require('../escalation');
+    res.json({ rules: escalation.rules(), defaults: escalation.DEFAULT_RULES });
+  })
+);
+
+router.put(
+  '/escalation',
+  requireAdmin,
+  wrap(async (req, res) => {
+    res.json({ rules: await require('../escalation').save(req.body.rules) });
   })
 );
 
@@ -266,6 +544,7 @@ router.patch(
       existing.id,
     ]);
     const user = await db.one(`${USER_SELECT} WHERE u.id = ?`, [existing.id]);
+    if (existing.role !== 'client' && f.role === 'client') await require('../inapp').clearStaffOnly(existing.id);
     res.json({ user: publicUser(user) });
   })
 );

@@ -45,6 +45,8 @@ async function seedAdmin() {
 
 async function main() {
   await db.init();
+  await require('./src/sla').load();
+  await require('./src/escalation').load();
   await seedAdmin();
 
   const app = express();
