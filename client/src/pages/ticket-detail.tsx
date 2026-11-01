@@ -66,6 +66,7 @@ import {
   AttachmentTitle,
   AttachmentTrigger,
 } from '@/components/ui/attachment';
+import { AttachmentPreviewDialog, previewKind, type PreviewFile } from '@/components/attachment-preview';
 import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
@@ -706,7 +707,7 @@ function MessageItem({
           </div>
         )}
         <BeforeAfterPhotos items={m.attachments} />
-        {m.attachments.some((a) => !a.label) && <Attachments items={m.attachments.filter((a) => !a.label)} />}
+        {m.attachments.some((a) => !a.label) && <Attachments items={m.attachments.filter((a) => !a.label)} align={own ? 'end' : 'start'} />}
         {seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
@@ -747,33 +748,60 @@ export function EditBox({ initial, busy, onSave, onCancel }: { initial: string; 
   );
 }
 
-// Files on a message: photos as preview cards, other files as cards with their type and size. Each opens or downloads.
-export function Attachments({ items, base = apiHref('/api/files') }: { items: Attachment[]; base?: string }) {
-  const isImage = (a: Attachment) => /^image\/(png|jpe?g|gif|webp)$/.test(a.mime);
-  const images = items.filter(isImage);
-  const others = items.filter((a) => !isImage(a));
+// Files on a message, on the sender's side: pictures shown in the chat, video and audio playable in place, other
+// files as cards with their type and size. Clicking one opens the preview (with open and download buttons).
+export function Attachments({ items, base = apiHref('/api/files'), align = 'start' }: { items: Attachment[]; base?: string; align?: 'start' | 'end' }) {
+  const [preview, setPreview] = useState<PreviewFile | null>(null);
+  const fileFor = (a: Attachment): PreviewFile => ({
+    name: a.original_name,
+    contentType: a.mime,
+    size: a.size,
+    viewUrl: `${base}/${a.id}`,
+    downloadUrl: `${base}/${a.id}?download=1`,
+  });
+  const kind = (a: Attachment) => previewKind(a.mime, a.original_name);
+  const images = items.filter((a) => kind(a) === 'image');
+  const media = items.filter((a) => kind(a) === 'video' || kind(a) === 'audio');
+  const others = items.filter((a) => !['image', 'video', 'audio'].includes(kind(a)));
+  const row = cn('flex max-w-full flex-wrap gap-2', align === 'end' && 'justify-end');
   return (
-    <div className="space-y-2">
+    <div className={cn('flex max-w-full flex-col gap-2', align === 'end' ? 'items-end self-end' : 'items-start self-start')}>
       {images.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className={row}>
           {images.map((a) => (
-            <UiAttachment key={a.id} orientation="vertical" size="sm" className="w-28 has-data-[slot=attachment-content]:w-28">
-              <AttachmentMedia variant="image">
-                <img src={`${base}/${a.id}`} alt={a.original_name} loading="lazy" />
-              </AttachmentMedia>
-              <AttachmentContent>
-                <AttachmentTitle title={a.original_name}>{a.original_name}</AttachmentTitle>
-                <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
-              </AttachmentContent>
-              <AttachmentTrigger asChild>
-                <a href={`${base}/${a.id}`} target="_blank" rel="noreferrer" aria-label={`Open ${a.original_name}`} />
-              </AttachmentTrigger>
-            </UiAttachment>
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => setPreview(fileFor(a))}
+              title={a.original_name}
+              aria-label={`View ${a.original_name}`}
+              className="overflow-hidden rounded-xl border bg-muted transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <img
+                src={`${base}/${a.id}`}
+                alt={a.original_name}
+                loading="lazy"
+                className={cn('block object-cover', images.length === 1 ? 'max-h-64 w-auto max-w-[min(18rem,100%)]' : 'size-28 sm:size-32')}
+              />
+            </button>
           ))}
         </div>
       )}
+      {media.map((a) =>
+        kind(a) === 'video' ? (
+          <div key={a.id} className="w-72 max-w-full overflow-hidden rounded-xl border bg-card">
+            <video src={`${base}/${a.id}`} controls playsInline preload="metadata" className="block max-h-72 w-full bg-black" />
+            <MediaCaption a={a} onOpen={() => setPreview(fileFor(a))} />
+          </div>
+        ) : (
+          <div key={a.id} className="w-72 max-w-full rounded-xl border bg-card p-2">
+            <audio src={`${base}/${a.id}`} controls preload="metadata" className="w-full" />
+            <MediaCaption a={a} onOpen={() => setPreview(fileFor(a))} />
+          </div>
+        )
+      )}
       {others.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className={row}>
           {others.map((a) => (
             <UiAttachment key={a.id} size="sm" className="max-w-64">
               <AttachmentMedia>
@@ -784,18 +812,24 @@ export function Attachments({ items, base = apiHref('/api/files') }: { items: At
                 <AttachmentDescription>{fileSize(a.size)}</AttachmentDescription>
               </AttachmentContent>
               <AttachmentTrigger asChild>
-                <a
-                  href={`${base}/${a.id}${a.mime === 'application/pdf' ? '' : '?download=1'}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={`${a.mime === 'application/pdf' ? 'Open' : 'Download'} ${a.original_name}`}
-                />
+                <button type="button" onClick={() => setPreview(fileFor(a))} aria-label={`View ${a.original_name}`} />
               </AttachmentTrigger>
             </UiAttachment>
           ))}
         </div>
       )}
+      {preview && <AttachmentPreviewDialog file={preview} onClose={() => setPreview(null)} />}
     </div>
+  );
+}
+
+// Name and size under a video or audio player; the name opens the preview.
+function MediaCaption({ a, onOpen }: { a: Attachment; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} className="flex w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left text-xs hover:underline">
+      <span className="truncate font-medium">{a.original_name}</span>
+      <span className="shrink-0 text-muted-foreground">{fileSize(a.size)}</span>
+    </button>
   );
 }
 

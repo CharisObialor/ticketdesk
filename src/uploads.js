@@ -15,6 +15,9 @@ fs.mkdirSync(transcriptsDir, { recursive: true });
 // the website and always sent back as downloads, so the portal never runs them.
 const BLOCKED = /\.(exe|bat|cmd|com|msi|msp|mst|scr|pif|cpl|ps1|psm1|psd1|vb|vbs|vbe|js|jse|wsf|wsc|ws|wsh|jar|hta|lnk|reg|scf|dll|sys|msc|gadget|application|appref-ms|inf|url)$/i;
 
+// Formats browsers show or play without running anything (pictures, PDFs, video, audio); everything else downloads.
+const INLINE = /^(image\/(png|jpe?g|gif|webp)|application\/pdf|video\/(mp4|webm|ogg|quicktime)|audio\/(mpeg|mp3|mp4|ogg|wav|x-wav|wave|webm|aac|x-m4a))$/;
+
 // Browsers send UTF-8 filenames that busboy decodes as latin1; recover the original.
 function fixName(name) {
   const utf8 = Buffer.from(name, 'latin1').toString('utf8');
@@ -93,4 +96,4 @@ function cleanup(files = []) {
   for (const f of files) fs.unlink(f.path, () => {});
 }
 
-module.exports = { upload, mailUpload, workUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir };
+module.exports = { upload, mailUpload, workUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir, INLINE };

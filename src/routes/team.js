@@ -3,7 +3,7 @@
 const path = require('path');
 const router = require('express').Router();
 const db = require('../db');
-const { upload, cleanup, uploadsDir } = require('../uploads');
+const { upload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const realtime = require('../realtime');
 const { requireAdmin } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
@@ -145,14 +145,14 @@ router.post(
   })
 );
 
-// A file from an admin chat, for members of that chat only. Images and PDFs open in the browser.
+// A file from an admin chat, for members of that chat only. Pictures, PDFs, video and audio open in the browser.
 router.get(
   '/team/files/:id',
   wrap(async (req, res) => {
     const a = await db.one('SELECT * FROM team_attachments WHERE id = ?', [Number(req.params.id)]);
     const member = a && (await db.one('SELECT user_id FROM team_chat_members WHERE chat_id = ? AND user_id = ?', [a.chat_id, req.user.id]));
     if (!a || !member) throw new HttpError(404, 'File not found');
-    const inline = /^(image\/(png|jpe?g|gif|webp)|application\/pdf)$/.test(a.mime) && req.query.download !== '1';
+    const inline = INLINE.test(a.mime) && req.query.download !== '1';
     res.attachment(a.original_name);
     if (inline) res.set('Content-Disposition', res.get('Content-Disposition').replace(/^attachment/, 'inline'));
     res.type(inline ? a.mime : 'application/octet-stream');

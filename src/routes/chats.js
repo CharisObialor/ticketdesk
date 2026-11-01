@@ -5,7 +5,7 @@ const notify = require('../notify');
 const realtime = require('../realtime');
 const privacy = require('../privacy');
 const ticketsSvc = require('../services/tickets');
-const { upload, cleanup, uploadsDir } = require('../uploads');
+const { upload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
 
@@ -438,7 +438,7 @@ router.get(
     const a = await db.one('SELECT * FROM chat_attachments WHERE id = ?', [Number(req.params.id)]);
     const member = a && (await db.one('SELECT user_id FROM chat_members WHERE group_id = ? AND user_id = ?', [a.group_id, req.user.id]));
     if (!a || (!member && !isAdmin(req.user))) throw new HttpError(404, 'File not found');
-    const inline = /^(image\/(png|jpe?g|gif|webp)|application\/pdf)$/.test(a.mime) && req.query.download !== '1';
+    const inline = INLINE.test(a.mime) && req.query.download !== '1';
     res.attachment(a.original_name);
     if (inline) res.set('Content-Disposition', res.get('Content-Disposition').replace(/^attachment/, 'inline'));
     res.type(inline ? a.mime : 'application/octet-stream');

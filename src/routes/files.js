@@ -1,12 +1,9 @@
 const path = require('path');
 const router = require('express').Router();
 const db = require('../db');
-const { uploadsDir, transcriptsDir } = require('../uploads');
+const { uploadsDir, transcriptsDir, INLINE } = require('../uploads');
 const { requireAuth, requireStaff, isStaff, canAccessTicket } = require('../auth');
 const { wrap, HttpError } = require('../util');
-
-// Only formats browsers render safely are shown inline; everything else downloads.
-const INLINE = /^(image\/(png|jpe?g|gif|webp)|application\/pdf)$/;
 
 router.get(
   '/files/:id',

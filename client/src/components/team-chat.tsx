@@ -183,6 +183,8 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
     }
   }
   const grouped = sameBlock(prev, m);
+  // A message that is only files has no text bubble.
+  const fileOnly = m.body === '(attachment)' && m.attachments.length > 0;
   return (
     <UiMessage align={own ? 'end' : 'start'} className={cn(!grouped && 'pt-3')}>
       <MessageAvatar className={cn('self-start', (grouped || own) && 'invisible')}>
@@ -201,13 +203,11 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
           <div className="w-72 max-w-full">
             <EditBox initial={m.body} busy={busy} onCancel={() => setEditing(false)} onSave={save} />
           </div>
-        ) : (
+        ) : fileOnly ? null : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            {!(m.body === '(attachment)' && m.attachments.length) && (
-              <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-                <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
-              </Bubble>
-            )}
+            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
+              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+            </Bubble>
             {own && (
               <Button
                 variant="ghost"
@@ -221,8 +221,8 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
             )}
           </div>
         )}
-        {m.edited_at && !editing && <span className="text-[10px] text-muted-foreground italic">edited</span>}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/team/files')} />}
+        {m.edited_at && !editing && <span className={cn('text-[10px] text-muted-foreground italic', own && 'self-end')}>edited</span>}
+        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/team/files')} align={own ? 'end' : 'start'} />}
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />

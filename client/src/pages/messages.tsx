@@ -517,7 +517,7 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
           <div className="w-72 max-w-full">
             <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
           </div>
-        ) : (
+        ) : m.body === '(attachment)' && m.attachments.length > 0 ? null : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
             <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
               <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
@@ -536,11 +536,11 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
           </div>
         )}
         {m.edited_at && !editing && (
-          <span className="text-[10px] text-muted-foreground italic" title={`Edited ${formatDateTime(m.edited_at)}`}>
+          <span className={cn('text-[10px] text-muted-foreground italic', own && 'self-end')} title={`Edited ${formatDateTime(m.edited_at)}`}>
             edited
           </span>
         )}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/chats/files')} />}
+        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/chats/files')} align={own ? 'end' : 'start'} />}
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
