@@ -540,7 +540,7 @@ router.patch(
       }
     }
     if (assignee) notify.assigned(updated, u);
-    res.json({ ticket: updated });
+    res.json({ ticket: updated, ...(askSignoff ? { signoffRequested: { required: Number(updated.signoff_required) } } : {}) });
   })
 );
 

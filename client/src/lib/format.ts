@@ -30,6 +30,10 @@ export const formatTime = (s: string | null | undefined) => {
   return d ? timeFmt.format(d) : '';
 };
 
+// Shown when marking a ticket resolved has asked the other admins to sign it off.
+export const signoffMessage = (required: number) =>
+  `The ticket will be resolved after sign-off by ${required === 1 ? 'another admin' : `${required} other admins`}. The client is told then.`;
+
 export function timeAgo(s: string | null | undefined) {
   const d = parseTs(s);
   if (!d) return '-';

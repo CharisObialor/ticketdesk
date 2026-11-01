@@ -39,7 +39,7 @@ import { EmptyState, Greeting, PageHeader } from '@/components/common';
 import { EscalatedBadge, PriorityBadge, ResolutionBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage, qs } from '@/lib/api';
-import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo } from '@/lib/format';
+import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo, signoffMessage } from '@/lib/format';
 import type { Company, Priority, Status, Ticket } from '@/lib/types';
 import { basename } from '@/lib/url-key';
 
@@ -81,8 +81,9 @@ export default function TicketsPage() {
     );
   const change = async (t: Ticket, body: Record<string, unknown>, done: string) => {
     try {
-      await api.patch(`/tickets/${t.id}`, body);
-      toast.success(done);
+      const r = await api.patch<{ signoffRequested?: { required: number } }>(`/tickets/${t.id}`, body);
+      if (r.signoffRequested) toast.info(`#${t.id} sent for sign-off`, { description: signoffMessage(r.signoffRequested.required) });
+      else toast.success(done);
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['counts'] });
     } catch (err) {

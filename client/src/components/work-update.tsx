@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { duration, fileSize } from '@/lib/format';
+import { duration, fileSize, signoffMessage } from '@/lib/format';
 import type { Attachment, Ticket } from '@/lib/types';
 import { apiHref } from '@/lib/api';
 
@@ -96,8 +96,9 @@ export function WorkUpdateDialog({ ticket: t, open, onOpenChange }: { ticket: Ti
     fd.set('labels', JSON.stringify(photos.map((p) => p.label)));
     try {
       await api.post(`/tickets/${t.id}/work-updates`, fd);
-      if (resolve) await api.patch(`/tickets/${t.id}`, { status: 'resolved' });
-      toast.success(resolve ? 'Work update posted and ticket marked as resolved' : 'Work update posted');
+      const r = resolve ? await api.patch<{ signoffRequested?: { required: number } }>(`/tickets/${t.id}`, { status: 'resolved' }) : null;
+      if (r && r.signoffRequested) toast.success('Work update posted and sent for sign-off', { description: signoffMessage(r.signoffRequested.required) });
+      else toast.success(resolve ? 'Work update posted and ticket marked as resolved' : 'Work update posted');
       qc.invalidateQueries({ queryKey: ['ticket', t.id] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
       reset();

@@ -89,7 +89,7 @@ import { VisitsCard } from '@/components/visits';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo } from '@/lib/format';
+import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo, signoffMessage } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, SignoffState, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
 import { fillPlaceholders } from '@/lib/placeholders';
@@ -122,8 +122,9 @@ export default function TicketDetailPage() {
   });
 
   const update = useMutation({
-    mutationFn: (body: Record<string, unknown>) => api.patch<{ ticket: Ticket }>(`/tickets/${id}`, body),
-    onSuccess: ({ ticket }) => {
+    mutationFn: (body: Record<string, unknown>) => api.patch<{ ticket: Ticket; signoffRequested?: { required: number } }>(`/tickets/${id}`, body),
+    onSuccess: ({ ticket, signoffRequested }) => {
+      if (signoffRequested) toast.info('Sent for sign-off', { description: signoffMessage(signoffRequested.required) });
       qc.setQueryData<TicketData>(['ticket', id], (prev) => (prev ? { ...prev, ticket } : prev));
       qc.invalidateQueries({ queryKey: ['ticket', id] });
       qc.invalidateQueries({ queryKey: ['tickets'] });
@@ -1300,7 +1301,9 @@ function DetailsCard({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Save changes to ticket #{t.id}?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    The client is told about status changes, and a new assignee is notified. Are you sure you want to make these changes?
+                    {draft.status === 'resolved' && saved.status !== 'resolved'
+                      ? 'The ticket will be resolved after sign-off by the other admins. Until then it keeps its current status, and the client is told once it is signed off. A new assignee is notified.'
+                      : 'The client is told about status changes, and a new assignee is notified. Are you sure you want to make these changes?'}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <ul className="space-y-1.5 rounded-md border p-3 text-sm">
