@@ -28,6 +28,9 @@ async function create(userId, { kind, title, body, link }) {
   ]);
   const notification = { id: r.insertId, user_id: userId, kind, title, body: body || null, link: link || null, is_read: 0, created_at: ts };
   realtime.toUsers([userId], 'notification:new', { notification });
+  require('./push')
+    .sendToUser(userId, { title: notification.title, body: notification.body, link: notification.link || '/', tag: `n${notification.id}` })
+    .catch((err) => console.error('[push] failed', err.message));
   // Trim old rows now and then so the table stays small.
   if (r.insertId % 50 === 0) {
     db.query(

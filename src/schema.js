@@ -286,6 +286,20 @@ CREATE TABLE IF NOT EXISTS sites (
   CONSTRAINT fk_sites_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  endpoint VARCHAR(1000) NOT NULL,
+  p256dh VARCHAR(200) NOT NULL,
+  auth VARCHAR(100) NOT NULL,
+  user_agent VARCHAR(255) NULL,
+  created_at DATETIME NOT NULL,
+  last_used_at DATETIME NULL,
+  KEY idx_ps_user (user_id),
+  KEY idx_ps_endpoint (endpoint(191)),
+  CONSTRAINT fk_ps_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS admin_ratings (
   ticket_id INT UNSIGNED NOT NULL,
   admin_id INT UNSIGNED NOT NULL,
@@ -433,6 +447,12 @@ CREATE TABLE IF NOT EXISTS sites (
   code TEXT NOT NULL, location TEXT, details TEXT, is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (company_id, code)
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ps_user ON push_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_ps_endpoint ON push_subscriptions(endpoint);
 CREATE TABLE IF NOT EXISTS admin_ratings (
   ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE, admin_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, rating INTEGER NOT NULL, comment TEXT,

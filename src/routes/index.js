@@ -57,6 +57,7 @@ router.use(require('./files'));
 router.use(require('./admin'));
 router.use(require('./extras'));
 router.use(require('./client'));
+router.use(require('./push'));
 router.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 module.exports = router;

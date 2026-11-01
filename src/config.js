@@ -50,6 +50,8 @@ module.exports = {
   },
   admin: { name: env.ADMIN_NAME || 'Admin', email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD },
   // The only admin who can create, edit or invite other admins (and promote people to admin).
+  // Admins who have the portal open get updates in the bell only; email waits until they have been away this long.
+  adminAwayMinutes: int(env.ADMIN_AWAY_MINUTES, 30),
   ownerEmail: (env.OWNER_EMAIL || 'charis.obialor@dateheight.com').trim().toLowerCase(),
   // 'graph' = Microsoft 365 through Microsoft Graph; 'smtp' = any SMTP/IMAP host (e.g. cPanel mail).
   // Microsoft 365 is used only once all four MS_* values are set, so a half-finished setup never breaks email.

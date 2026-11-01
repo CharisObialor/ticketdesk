@@ -126,11 +126,16 @@ function send(message) {
     return;
   }
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  // An email for an admin who has only just left waits until they have been away long enough (see notify.js);
+  // it is dropped if they come back first, as they will see the update in the bell.
+  const { holdUntil, awayUserId, ...rest } = message;
+  const due = holdUntil ? new Date(holdUntil).toISOString().slice(0, 19).replace('T', ' ') : ts;
+  const payload = awayUserId ? { ...rest, awayCheck: { userId: awayUserId, queuedAt: ts } } : rest;
   db.query("INSERT INTO mail_outbox (recipient, subject, payload, status, attempts, next_attempt_at, created_at) VALUES (?, ?, ?, 'pending', 0, ?, ?)", [
     String(message.to).slice(0, 255),
     String(message.subject || '').slice(0, 255),
-    JSON.stringify(message),
-    ts,
+    JSON.stringify(payload),
+    due,
     ts,
   ])
     .then(() => setImmediate(processOutbox))
@@ -142,6 +147,13 @@ function send(message) {
 
 let lastPurge = 0;
 
+// True when the admin a held email was for has come back (or is online now), so the bell has told them.
+async function cameBack({ userId, queuedAt }) {
+  if (require('./realtime').isOnline(userId)) return true;
+  const u = await require('./db').one('SELECT last_seen_at FROM users WHERE id = ?', [userId]);
+  return !!(u && u.last_seen_at && String(u.last_seen_at) > String(queuedAt));
+}
+
 // Sends every queued email that is due. Runs right after queueing and every 30 seconds.
 async function processOutbox() {
   const db = require('./db');
@@ -152,7 +164,12 @@ async function processOutbox() {
     const due = await db.query("SELECT * FROM mail_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT 25", [now()]);
     for (const row of due) {
       try {
-        await deliver(JSON.parse(row.payload));
+        const { awayCheck, ...message } = JSON.parse(row.payload);
+        if (awayCheck && (await cameBack(awayCheck))) {
+          await db.query("UPDATE mail_outbox SET status = 'skipped', sent_at = ? WHERE id = ?", [now(), row.id]);
+          continue;
+        }
+        await deliver(message);
         await db.query("UPDATE mail_outbox SET status = 'sent', attempts = attempts + 1, sent_at = ?, last_error = NULL WHERE id = ?", [now(), row.id]);
       } catch (err) {
         const attempts = Number(row.attempts) + 1;
@@ -173,7 +190,7 @@ async function processOutbox() {
     // Keep a week of sent mail for troubleshooting. Clearing older mail once an hour is plenty.
     if (Date.now() - lastPurge > 3600e3) {
       lastPurge = Date.now();
-      await db.query("DELETE FROM mail_outbox WHERE status = 'sent' AND sent_at < ?", [new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19).replace('T', ' ')]);
+      await db.query("DELETE FROM mail_outbox WHERE status IN ('sent', 'skipped') AND sent_at < ?", [new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 19).replace('T', ' ')]);
     }
   } catch (err) {
     console.error('[mail] outbox run failed:', err.message);

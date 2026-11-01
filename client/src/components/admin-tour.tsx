@@ -576,6 +576,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Pick an <B>avatar</B>. There are 60 to choose from, or stick with your initials.</>,
               <>Set your <B>email signature</B>. It goes on ticket replies and emails from your mailbox.</>,
               <>Choose your <B>SLA reminders</B>: how often you're reminded about tickets at risk, and whether by email too.</>,
+              <>Turn on <B>notifications on this device</B> for pop-ups on your computer or phone (on iPhone, add the portal to your Home Screen first). While you have the portal open, updates come to the bell instead of your email; email only follows if you've been away for half an hour.</>,
               <>Pick a <B>text size</B> that suits you: smaller fits more on screen, larger is easier on the eyes.</>,
               <>Add your <B>phone number</B>, and decide whether you want <B>email notifications</B>.</>,
               <>Change your <B>password</B>: we email you a one-time code to confirm it's you. It needs to be a strong one, and the checklist tells you what's missing.</>,

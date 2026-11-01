@@ -60,7 +60,18 @@ function details(t, { internal = false } = {}) {
 }
 
 // Recipients include everyone relevant; `notify_email` decides whether they also get an email.
-const USER_COLS = 'id, name, email, role, notify_email, notify_prefs';
+const USER_COLS = 'id, name, email, role, notify_email, notify_prefs, last_seen_at';
+
+// Admins with the portal open see updates in the bell, so they are not emailed. An admin who left less than
+// ADMIN_AWAY_MINUTES ago gets the email only if they are still away by then; after that, straight away.
+function adminEmailTiming(r) {
+  if (r.role !== 'admin') return { send: true };
+  if (require('./realtime').isOnline(r.id)) return { send: false };
+  const away = config.adminAwayMinutes * 60000;
+  const seen = r.last_seen_at ? new Date(`${String(r.last_seen_at).replace(' ', 'T')}Z`).getTime() : 0;
+  if (seen && Date.now() - seen < away) return { send: true, holdUntil: new Date(seen + away), awayUserId: r.id };
+  return { send: true };
+}
 
 // What people can switch off, by email and in the bell. Account, security and one-time code emails always go.
 const KIND_CATEGORY = {
@@ -129,6 +140,8 @@ function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = f
         .catch((err) => console.error('[notify] in-app failed', err.message));
     }
     if (!email || !Number(r.notify_email) || !wants(r, kind, 'email')) continue;
+    const timing = adminEmailTiming(r);
+    if (!timing.send) continue;
     const reply = ticketId ? replyAddress(ticketId, r.id) : null;
     // Emails an admin triggers go out from their own mailbox (Microsoft 365); replies still come back to the ticket.
     // Agents and technicians send through the system mailbox.
@@ -146,6 +159,8 @@ function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = f
       to: r.email,
       subject,
       ticketId,
+      holdUntil: timing.holdUntil,
+      awayUserId: timing.awayUserId,
       sender,
       replyTo: reply || undefined,
       unsubscribeUrl: unsubscribeUrl(r.id),

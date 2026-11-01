@@ -14,6 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { CompanyLogo, PageHeader, UserAvatar } from '@/components/common';
 import { AvatarPickerCard } from '@/components/avatar-upload';
+import { DeviceNotificationsCard } from '@/components/device-notifications';
 import { useSession } from '@/hooks/use-session';
 import { TEXT_SIZES, useTheme } from '@/hooks/use-theme';
 import { cn } from '@/lib/utils';
@@ -65,6 +66,7 @@ export default function ProfilePage() {
       )}
       <DetailsForm user={user} />
       <NotificationPrefsForm user={user} />
+      <DeviceNotificationsCard />
       <AvatarPickerCard user={user} />
       <TextSizeCard />
       {user.role === 'admin' && user.sla_reminders && <SlaRemindersForm user={user} prefs={user.sla_reminders} />}

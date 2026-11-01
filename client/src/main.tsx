@@ -151,6 +151,10 @@ const router = createBrowserRouter([
 // Installable app: the service worker caches the app shell so it opens instantly (production builds only).
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  // A tapped device notification opens its page inside the already-open portal.
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'open' && typeof e.data.link === 'string' && e.data.link.startsWith('/')) router.navigate(e.data.link);
+  });
 }
 
 createRoot(document.getElementById('root')!).render(

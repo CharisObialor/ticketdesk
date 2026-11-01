@@ -125,6 +125,9 @@ function track(user, delta) {
   presenceTimer = setTimeout(() => io && io.to('staff').emit('presence', presence()), 500);
 }
 
+// Whether the person has the portal open right now (any device).
+const isOnline = (userId) => online.has(Number(userId));
+
 function presence() {
   const users = [...online.values()].map(({ user: u }) => ({
     id: u.id,
@@ -154,4 +157,4 @@ function toUsers(userIds, event, payload, { admins = false } = {}) {
   io.to(rooms).except('staff').emit(event, privacy.scrub(payload));
 }
 
-module.exports = { init, presence, toTicket, toUsers };
+module.exports = { init, presence, toTicket, toUsers, isOnline };
