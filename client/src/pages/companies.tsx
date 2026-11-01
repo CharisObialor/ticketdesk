@@ -25,7 +25,8 @@ import { Card } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -43,9 +44,12 @@ import { PRIORITY_LABELS, duration, formatDate } from '@/lib/format';
 import type { Company } from '@/lib/types';
 
 export default function CompaniesPage() {
-  const { isAdmin } = useSession();
+  const { isAdmin, user } = useSession();
+  // Only the account owner can delete a company permanently.
+  const isOwner = !!user?.is_owner;
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Company | 'new' | null>(null);
+  const [deleting, setDeleting] = useState<Company | null>(null);
   const [viewingId, setViewingId] = useState<number | null>(null);
   const companies = useQuery({ queryKey: ['companies'], queryFn: () => api.get<{ companies: Company[] }>('/companies') });
 
@@ -151,6 +155,15 @@ export default function CompaniesPage() {
                                 Edit company
                               </DropdownMenuItem>
                             )}
+                            {isOwner && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem variant="destructive" onClick={() => setDeleting(c)}>
+                                  <Trash2 />
+                                  Delete permanently
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -201,6 +214,15 @@ export default function CompaniesPage() {
                         </a>
                       </ContextMenuItem>
                     )}
+                    {isOwner && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => setDeleting(c)}>
+                          <Trash2 />
+                          Delete permanently
+                        </ContextMenuItem>
+                      </>
+                    )}
                   </ContextMenuContent>
                 </ContextMenu>
               ))}
@@ -214,7 +236,46 @@ export default function CompaniesPage() {
         onEdit={isAdmin ? (c) => setEditing(c) : undefined}
       />
       {editing && <CompanyDialog company={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {deleting && <DeleteCompanyDialog company={deleting} onClose={() => setDeleting(null)} />}
     </>
+  );
+}
+
+// Permanent deletion of a client company, with a count of everything that goes with it.
+function DeleteCompanyDialog({ company, onClose }: { company: Company; onClose: () => void }) {
+  const qc = useQueryClient();
+  const usage = useQuery({
+    queryKey: ['company-usage', company.id],
+    queryFn: () => api.get<{ usage: { tickets: number; users: number; groups: number; sites: number } }>(`/companies/${company.id}/usage`),
+  });
+  const u = usage.data?.usage;
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  return (
+    <DeleteForeverDialog
+      title={`Delete ${company.name}`}
+      confirmWord={company.name}
+      onClose={onClose}
+      onConfirm={async () => {
+        await api.delete(`/companies/${company.id}`);
+        toast.success(`${company.name} was deleted`);
+        for (const key of ['companies', 'users', 'tickets', 'chats', 'dashboard']) qc.invalidateQueries({ queryKey: [key] });
+      }}
+    >
+      <p>The company is removed with everything that belongs to it:</p>
+      {u ? (
+        <ul className="list-disc space-y-1 pl-5">
+          <li>{n(u.tickets, 'ticket', 'tickets')}, with their conversations, files, visits, sign-offs and ratings</li>
+          <li>{n(u.users, 'client account', 'client accounts')}</li>
+          <li>{n(u.groups, 'group chat', 'group chats')}</li>
+          <li>{n(u.sites, 'site', 'sites')}, and the company logo</li>
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">{usage.isError ? errorMessage(usage.error) : 'Counting...'}</p>
+      )}
+      <p className="text-muted-foreground">
+        Reports will no longer include its tickets. To stop its people signing in but keep the history, edit the company and turn it off instead.
+      </p>
+    </DeleteForeverDialog>
   );
 }
 

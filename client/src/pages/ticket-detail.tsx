@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
@@ -22,9 +22,11 @@ import {
   ShieldOff,
   TriangleAlert,
   Smartphone,
+  Trash2,
   Users,
   Wrench,
 } from 'lucide-react';
+import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
 import { toast } from 'sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -282,6 +284,8 @@ function TicketActions({
   // The engineer the ticket is assigned to (or an admin, or anyone on staff while it is unassigned) reports the work.
   const canReportWork = isStaff && t.status !== 'closed' && (isAdmin || !t.assigned_to || t.assigned_to === user?.id);
   const [emailOpen, setEmailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const navigate = useNavigate();
   const isOpen = OPEN_STATUSES.includes(t.status);
 
   const archive = useMutation({
@@ -363,6 +367,32 @@ function TicketActions({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* Only the account owner can delete a ticket permanently. */}
+      {user?.is_owner && (
+        <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}>
+          <Trash2 />
+          Delete
+        </Button>
+      )}
+      {deleteOpen && (
+        <DeleteForeverDialog
+          title={`Delete ticket #${t.id}`}
+          onClose={() => setDeleteOpen(false)}
+          onConfirm={async () => {
+            await api.delete(`/tickets/${t.id}`);
+            toast.success(`Ticket #${t.id} was deleted`);
+            qc.removeQueries({ queryKey: ['ticket', t.id] });
+            qc.invalidateQueries({ queryKey: ['tickets'] });
+            navigate('/tickets', { replace: true });
+          }}
+        >
+          <p>
+            <span className="font-medium">{t.subject}</span> ({t.company_name}) is removed with its whole conversation, internal notes, files, saved
+            transcripts, visits, sign-off and ratings, for staff and the client.
+          </p>
+          <p className="text-muted-foreground">It also disappears from reports, statements and the dashboard.</p>
+        </DeleteForeverDialog>
+      )}
       <EscalateDialog open={escalateOpen} onOpenChange={setEscalateOpen} isStaff={isStaff} onConfirm={(reason) => onUpdate({ escalate: true, reason })} />
       {emailOpen && <EmailTicketDialog ticket={t} onClose={() => setEmailOpen(false)} />}
       {canReportWork && <WorkUpdateDialog ticket={t} open={workOpen} onOpenChange={setWorkOpen} />}

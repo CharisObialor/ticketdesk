@@ -103,6 +103,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         toast.info(`New ticket #${ticket.id}`, { description: `${ticket.company_name}: ${ticket.subject}` });
       }
     });
+    // The owner deleted a ticket: drop it from what is open and from the lists.
+    socket.on('ticket:deleted', ({ ticketId }: { ticketId: number }) => {
+      qc.removeQueries({ queryKey: ['ticket', ticketId] });
+      refreshLists();
+    });
     socket.on('ticket:escalated', ({ ticket }: { ticket: Ticket }) => {
       putTicket(ticket);
       refreshLists();

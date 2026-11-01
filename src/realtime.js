@@ -157,4 +157,9 @@ function toUsers(userIds, event, payload, { admins = false } = {}) {
   io.to(rooms).except('staff').emit(event, privacy.scrub(payload));
 }
 
-module.exports = { init, presence, toTicket, toUsers, isOnline };
+// Closes every open tab's live connection for a user whose account was deleted.
+function disconnectUser(userId) {
+  if (io) io.in(`user:${userId}`).disconnectSockets(true);
+}
+
+module.exports = { init, presence, toTicket, toUsers, isOnline, disconnectUser };

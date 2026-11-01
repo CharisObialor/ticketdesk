@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Building2, Copy, Loader2, Mail, MoreHorizontal, Pencil, Plus, Search, Send, Users as UsersIcon } from 'lucide-react';
+import { Building2, Copy, Loader2, Mail, MoreHorizontal, Pencil, Plus, Search, Send, Trash2, Users as UsersIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, PageHeader, UserAvatar } from '@/components/common';
+import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage, qs } from '@/lib/api';
 import { ROLE_LABELS, timeAgo } from '@/lib/format';
@@ -34,6 +35,10 @@ export default function UsersPage() {
   const [role, setRole] = useState(ALL);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<User | 'new' | null>(null);
+  const [deleting, setDeleting] = useState<User | null>(null);
+  // The owner can delete any account permanently, except their own.
+  const canDelete = (u: User) => isOwner && u.id !== me?.id;
+  const qc = useQueryClient();
 
   const users = useQuery({
     queryKey: ['users', { companyId }],
@@ -186,6 +191,15 @@ export default function UsersPage() {
                                     {u.has_password ? 'Send password setup link' : 'Resend invitation'}
                                   </DropdownMenuItem>
                                 )}
+                                {canDelete(u) && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem variant="destructive" onClick={() => setDeleting(u)}>
+                                      <Trash2 />
+                                      Delete permanently
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           )}
@@ -230,6 +244,15 @@ export default function UsersPage() {
                         Show everyone at {u.company_name ?? 'this company'}
                       </ContextMenuItem>
                     )}
+                    {canDelete(u) && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" onClick={() => setDeleting(u)}>
+                          <Trash2 />
+                          Delete permanently
+                        </ContextMenuItem>
+                      </>
+                    )}
                   </ContextMenuContent>
                 </ContextMenu>
               ))}
@@ -245,6 +268,28 @@ export default function UsersPage() {
           canMakeAdmin={isOwner}
           onClose={() => setEditing(null)}
         />
+      )}
+      {deleting && (
+        <DeleteForeverDialog
+          title={`Delete ${deleting.name}`}
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            await api.delete(`/users/${deleting.id}`);
+            toast.success(`${deleting.name} was deleted`);
+            qc.invalidateQueries({ queryKey: ['users'] });
+            qc.invalidateQueries({ queryKey: ['companies'] });
+          }}
+        >
+          <p>
+            The account <span className="font-medium">{deleting.email}</span> ({ROLE_LABELS[deleting.role]}
+            {deleting.company_name ? `, ${deleting.company_name}` : ''}) is removed, with their notifications, device sign-ups
+            {deleting.role === 'client' ? '' : ' and direct admin chats'}. They are signed out at once.
+          </p>
+          <p className="text-muted-foreground">
+            Tickets and messages they wrote stay, shown as from a former user. To stop someone signing in but keep the account, edit the user and turn it off
+            instead.
+          </p>
+        </DeleteForeverDialog>
       )}
     </>
   );

@@ -561,4 +561,58 @@ router.post(
   })
 );
 
+// ---- Permanent deletion (the account owner only) ----
+
+const OWNER_DELETE = 'Only the account owner can permanently delete.';
+function requireOwner(req, res, next) {
+  next(req.user && isOwner(req.user) ? undefined : new HttpError(403, OWNER_DELETE));
+}
+const deletion = (what, id, by) => console.log(`[delete] ${what} ${id} permanently deleted by ${by.email}`);
+
+router.delete(
+  '/tickets/:id',
+  requireOwner,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const done = await require('../purge').deleteTicket(id);
+    if (!done) throw new HttpError(404, 'Ticket not found');
+    deletion('ticket', `#${id}`, req.user);
+    res.json({ ok: true });
+  })
+);
+
+router.delete(
+  '/users/:id',
+  requireOwner,
+  wrap(async (req, res) => {
+    const user = await db.one('SELECT id, email FROM users WHERE id = ?', [Number(req.params.id)]);
+    if (!user) throw new HttpError(404, 'User not found');
+    if (user.id === req.user.id) throw new HttpError(400, 'You cannot delete your own account');
+    await require('../purge').deleteUser(user.id);
+    deletion('user', user.email, req.user);
+    res.json({ ok: true });
+  })
+);
+
+router.get(
+  '/companies/:id/usage',
+  requireOwner,
+  wrap(async (req, res) => {
+    const company = await db.one('SELECT id FROM companies WHERE id = ?', [Number(req.params.id)]);
+    if (!company) throw new HttpError(404, 'Company not found');
+    res.json({ usage: await require('../purge').companyUsage(company.id) });
+  })
+);
+
+router.delete(
+  '/companies/:id',
+  requireOwner,
+  wrap(async (req, res) => {
+    const done = await require('../purge').deleteCompany(Number(req.params.id));
+    if (!done) throw new HttpError(404, 'Company not found');
+    deletion('company', `${done.name} (${done.tickets} tickets, ${done.users} users)`, req.user);
+    res.json({ ok: true, ...done });
+  })
+);
+
 module.exports = router;
