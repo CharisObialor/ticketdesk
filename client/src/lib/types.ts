@@ -274,11 +274,19 @@ export interface Company {
   total_tickets: number;
 }
 
+export interface ConversationImage {
+  kind: 'avatar' | 'logo';
+  url: string | null;
+  user_id?: number | null;
+}
+
 export interface ChatItem {
   // 'team': admin-only chats.
   type: 'group' | 'ticket' | 'team';
   id: number;
   title: string;
+  // The conversation's picture: a company's (or our) logo, or the other admin's avatar.
+  image?: ConversationImage | null;
   subtitle: string;
   company_name: string | null;
   last_at: string;

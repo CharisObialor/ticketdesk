@@ -23,10 +23,13 @@ import {
 } from '@/components/ui/message-scroller';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { useSession } from '@/hooks/use-session';
-import { api, errorMessage } from '@/lib/api';
+import { api, apiHref, errorMessage } from '@/lib/api';
+import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { ConversationPicture } from '@/components/conversation-image';
+import type { Attachment } from '@/lib/types';
 import { formatDateTime, formatTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { EditBox } from '@/pages/ticket-detail';
+import { Attachments, EditBox } from '@/pages/ticket-detail';
 
 export interface TeamMessage {
   id: number;
@@ -38,6 +41,7 @@ export interface TeamMessage {
   edited_at: string | null;
   user_name: string | null;
   user_avatar_url: string | null;
+  attachments: Attachment[];
 }
 export interface TeamChatData {
   chat: { id: number; name: string; is_direct: boolean; created_by: number | null };
@@ -107,9 +111,11 @@ export function TeamPane({ chatId }: { chatId: number }) {
             <ArrowLeft />
           </Link>
         </Button>
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <ShieldCheck className="size-4" />
-        </div>
+        {chat.is_direct && others[0] ? (
+          <UserAvatar name={others[0].name} userId={others[0].id} src={others[0].avatar_url} className="size-9 shrink-0" />
+        ) : (
+          <ConversationPicture image={{ kind: 'logo', url: '/logo-mark.png' }} name={chat.name} icon={ShieldCheck} className="size-9" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold">{chat.name}</div>
           <div className="truncate text-xs text-muted-foreground">
@@ -197,9 +203,11 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
           </div>
         ) : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
-            </Bubble>
+            {!(m.body === '(attachment)' && m.attachments.length) && (
+              <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
+                <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+              </Bubble>
+            )}
             {own && (
               <Button
                 variant="ghost"
@@ -214,6 +222,7 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
           </div>
         )}
         {m.edited_at && !editing && <span className="text-[10px] text-muted-foreground italic">edited</span>}
+        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/team/files')} />}
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
@@ -227,17 +236,22 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
 
 function TeamComposer({ chatId }: { chatId: number }) {
   const qc = useQueryClient();
+  const files = useFileList();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   async function send() {
     const text = body.trim();
-    if (!text || busy) return;
+    if ((!text && !files.files.length) || busy) return;
     setBusy(true);
+    const fd = new FormData();
+    fd.set('body', text);
+    for (const f of files.files) fd.append('files', f);
     try {
-      const { message } = await api.post<{ message: TeamMessage }>(`/team/chats/${chatId}/messages`, { body: text });
+      const { message } = await api.post<{ message: TeamMessage }>(`/team/chats/${chatId}/messages`, fd);
       qc.setQueryData<TeamChatData>(['team', chatId], (p) => (p && !p.messages.some((x) => x.id === message.id) ? { ...p, messages: [...p.messages, message] } : p));
       qc.invalidateQueries({ queryKey: ['chats'] });
       setBody('');
+      files.clear();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -251,11 +265,30 @@ function TeamComposer({ chatId }: { chatId: number }) {
     }
   };
   return (
-    <div className="flex items-end gap-2 border-t p-3">
-      <Textarea rows={1} maxLength={10000} placeholder="Message the admins (Enter to send)" className="max-h-40 min-h-10 resize-none" value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onKey} />
-      <Button onClick={send} disabled={busy || !body.trim()} aria-label="Send">
-        {busy ? <Loader2 className="animate-spin" /> : <Send />}
-      </Button>
+    <div className="space-y-2 border-t p-3">
+      <FileChips list={files} />
+      <div className="flex items-end gap-2">
+        <AttachButton list={files} />
+        <Textarea
+          rows={1}
+          maxLength={10000}
+          placeholder="Message the admins (Enter to send)"
+          className="max-h-40 min-h-10 flex-1 resize-none"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={onKey}
+          onPaste={(e) => {
+            const pasted = Array.from(e.clipboardData.files);
+            if (pasted.length) {
+              e.preventDefault();
+              files.add(pasted);
+            }
+          }}
+        />
+        <Button onClick={send} disabled={busy || (!body.trim() && !files.files.length)} aria-label="Send">
+          {busy ? <Loader2 className="animate-spin" /> : <Send />}
+        </Button>
+      </div>
     </div>
   );
 }

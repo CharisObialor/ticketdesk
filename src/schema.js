@@ -322,6 +322,22 @@ CREATE TABLE IF NOT EXISTS team_messages (
   CONSTRAINT fk_tm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS team_attachments (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  chat_id INT UNSIGNED NOT NULL,
+  message_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NULL,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name VARCHAR(100) NOT NULL,
+  mime VARCHAR(150) NOT NULL,
+  size INT UNSIGNED NOT NULL,
+  created_at DATETIME NOT NULL,
+  KEY idx_ta_chat (chat_id),
+  KEY idx_ta_message (message_id),
+  CONSTRAINT fk_ta_chat FOREIGN KEY (chat_id) REFERENCES team_chats(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ta_message FOREIGN KEY (message_id) REFERENCES team_messages(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id INT UNSIGNED NOT NULL,
@@ -499,6 +515,13 @@ CREATE TABLE IF NOT EXISTS team_messages (
   created_at TEXT NOT NULL, edited_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tm_chat ON team_messages(chat_id, id);
+CREATE TABLE IF NOT EXISTS team_attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL REFERENCES team_chats(id) ON DELETE CASCADE,
+  message_id INTEGER NOT NULL REFERENCES team_messages(id) ON DELETE CASCADE, user_id INTEGER,
+  original_name TEXT NOT NULL, stored_name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ta_chat ON team_attachments(chat_id);
+CREATE INDEX IF NOT EXISTS idx_ta_message ON team_attachments(message_id);
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT

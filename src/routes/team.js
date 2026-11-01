@@ -1,7 +1,9 @@
 // Admin chats: direct messages and small groups between admins, under Messages. Admins only, and no emails or
 // bell notifications: new messages arrive live and show as unread in Messages.
+const path = require('path');
 const router = require('express').Router();
 const db = require('../db');
+const { upload, cleanup, uploadsDir } = require('../uploads');
 const realtime = require('../realtime');
 const { requireAdmin } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
@@ -39,7 +41,15 @@ async function validAdmins(ids, exceptId) {
 
 const messageSelect = `SELECT m.id, m.chat_id, m.user_id, m.body, m.kind, m.created_at, m.edited_at, u.name AS user_name, u.avatar AS user_avatar
   FROM team_messages m LEFT JOIN users u ON u.id = m.user_id`;
-const shape = (m) => ({ ...m, user_avatar_url: avatarUrl(m.user_avatar), user_avatar: undefined });
+const shape = (m) => ({ ...m, user_avatar_url: avatarUrl(m.user_avatar), user_avatar: undefined, attachments: m.attachments || [] });
+const ATTACHMENT_COLS = 'id, message_id, original_name, mime, size, created_at';
+async function withAttachments(messages) {
+  if (!messages.length) return messages;
+  const ids = messages.map((m) => m.id);
+  const atts = await db.query(`SELECT ${ATTACHMENT_COLS} FROM team_attachments WHERE message_id IN (${db.inList(ids)})`, ids);
+  for (const m of messages) m.attachments = atts.filter((a) => Number(a.message_id) === Number(m.id));
+  return messages;
+}
 
 async function postSystem(chatId, actor, body) {
   const ts = now();
@@ -90,7 +100,7 @@ router.get(
       `SELECT m.user_id AS id, u.name, u.avatar, u.job_title, m.last_read_id FROM team_chat_members m JOIN users u ON u.id = m.user_id WHERE m.chat_id = ? ORDER BY u.name`,
       [chat.id]
     );
-    const messages = await db.query(`SELECT * FROM (${messageSelect} WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT ${MESSAGE_LIMIT}) x ORDER BY id`, [chat.id]);
+    const messages = await withAttachments(await db.query(`SELECT * FROM (${messageSelect} WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT ${MESSAGE_LIMIT}) x ORDER BY id`, [chat.id]));
     const other = chat.is_direct ? members.find((m) => Number(m.id) !== req.user.id) : null;
     res.json({
       chat: { id: chat.id, name: chat.is_direct ? (other ? other.name : 'Direct message') : chat.name, is_direct: !!Number(chat.is_direct), created_by: chat.created_by },
@@ -100,19 +110,54 @@ router.get(
   })
 );
 
+// A message, with up to 5 files (same limits and blocked types as other chats).
 router.post(
   '/team/chats/:id/messages',
+  upload.array('files'),
   wrap(async (req, res) => {
-    const { chat, members } = await loadChat(req);
-    const body = clean(req.body.body, 10000);
-    if (!body) throw new HttpError(400, 'Write a message');
-    const ts = now();
-    const r = await db.query("INSERT INTO team_messages (chat_id, user_id, body, kind, created_at) VALUES (?, ?, ?, 'message', ?)", [chat.id, req.user.id, body, ts]);
-    await db.query('UPDATE team_chats SET last_message_at = ? WHERE id = ?', [ts, chat.id]);
-    await db.query('UPDATE team_chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?', [r.insertId, chat.id, req.user.id]);
-    const message = shape(await db.one(`${messageSelect} WHERE m.id = ?`, [r.insertId]));
-    realtime.toUsers(members, 'team:message', { chatId: chat.id, message });
-    res.status(201).json({ message });
+    const files = req.files || [];
+    try {
+      const { chat, members } = await loadChat(req);
+      const body = clean(req.body.body, 10000);
+      if (!body && !files.length) throw new HttpError(400, 'Write a message or attach a file');
+      const ts = now();
+      const r = await db.query("INSERT INTO team_messages (chat_id, user_id, body, kind, created_at) VALUES (?, ?, ?, 'message', ?)", [
+        chat.id,
+        req.user.id,
+        body || '(attachment)',
+        ts,
+      ]);
+      for (const f of files) {
+        await db.query(
+          'INSERT INTO team_attachments (chat_id, message_id, user_id, original_name, stored_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [chat.id, r.insertId, req.user.id, f.originalname, f.filename, f.mimetype, f.size, ts]
+        );
+      }
+      await db.query('UPDATE team_chats SET last_message_at = ? WHERE id = ?', [ts, chat.id]);
+      await db.query('UPDATE team_chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?', [r.insertId, chat.id, req.user.id]);
+      const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [r.insertId])])).map(shape);
+      realtime.toUsers(members, 'team:message', { chatId: chat.id, message });
+      res.status(201).json({ message });
+    } catch (err) {
+      cleanup(files);
+      throw err;
+    }
+  })
+);
+
+// A file from an admin chat, for members of that chat only. Images and PDFs open in the browser.
+router.get(
+  '/team/files/:id',
+  wrap(async (req, res) => {
+    const a = await db.one('SELECT * FROM team_attachments WHERE id = ?', [Number(req.params.id)]);
+    const member = a && (await db.one('SELECT user_id FROM team_chat_members WHERE chat_id = ? AND user_id = ?', [a.chat_id, req.user.id]));
+    if (!a || !member) throw new HttpError(404, 'File not found');
+    const inline = /^(image\/(png|jpe?g|gif|webp)|application\/pdf)$/.test(a.mime) && req.query.download !== '1';
+    res.attachment(a.original_name);
+    if (inline) res.set('Content-Disposition', res.get('Content-Disposition').replace(/^attachment/, 'inline'));
+    res.type(inline ? a.mime : 'application/octet-stream');
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.sendFile(path.join(uploadsDir, path.basename(a.stored_name)));
   })
 );
 
@@ -127,7 +172,7 @@ router.patch(
     const body = clean(req.body.body, 10000);
     if (!body) throw new HttpError(400, 'A message cannot be empty');
     await db.query('UPDATE team_messages SET body = ?, edited_at = ? WHERE id = ?', [body, now(), m.id]);
-    const message = shape(await db.one(`${messageSelect} WHERE m.id = ?`, [m.id]));
+    const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [m.id])])).map(shape);
     realtime.toUsers(members, 'team:updated', { chatId: chat.id, message });
     res.json({ message });
   })
@@ -177,19 +222,23 @@ async function inboxItems(user) {
   const rows = await db.query(
     `SELECT c.id, c.name, c.is_direct, c.last_message_at,
       (SELECT COUNT(*) FROM team_chat_members x WHERE x.chat_id = c.id) AS member_count,
-      (SELECT u.name FROM team_chat_members x JOIN users u ON u.id = x.user_id WHERE x.chat_id = c.id AND x.user_id <> ? LIMIT 1) AS other_name,
+      (SELECT u.name FROM team_chat_members x JOIN users u ON u.id = x.user_id WHERE x.chat_id = c.id AND x.user_id <> ? ORDER BY u.id LIMIT 1) AS other_name,
+      (SELECT u.id FROM team_chat_members x JOIN users u ON u.id = x.user_id WHERE x.chat_id = c.id AND x.user_id <> ? ORDER BY u.id LIMIT 1) AS other_id,
+      (SELECT u.avatar FROM team_chat_members x JOIN users u ON u.id = x.user_id WHERE x.chat_id = c.id AND x.user_id <> ? ORDER BY u.id LIMIT 1) AS other_avatar,
       (SELECT tm.body FROM team_messages tm WHERE tm.chat_id = c.id ORDER BY tm.id DESC LIMIT 1) AS last_body,
       (SELECT tm.kind FROM team_messages tm WHERE tm.chat_id = c.id ORDER BY tm.id DESC LIMIT 1) AS last_kind,
       (SELECT lu.name FROM team_messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.chat_id = c.id ORDER BY tm.id DESC LIMIT 1) AS last_user,
       (SELECT COUNT(*) FROM team_messages tm WHERE tm.chat_id = c.id AND tm.kind = 'message' AND tm.user_id <> ? AND tm.id > m.last_read_id) AS unread
      FROM team_chats c JOIN team_chat_members m ON m.chat_id = c.id AND m.user_id = ?
      ORDER BY c.last_message_at DESC LIMIT 100`,
-    [user.id, user.id, user.id]
+    [user.id, user.id, user.id, user.id, user.id]
   );
   return rows.map((c) => ({
     type: 'team',
     id: c.id,
     title: Number(c.is_direct) ? c.other_name || 'Direct message' : c.name,
+    // Direct chats show the other admin's picture; admin groups show our logo.
+    image: Number(c.is_direct) ? { kind: 'avatar', url: avatarUrl(c.other_avatar), user_id: c.other_id ? Number(c.other_id) : null } : { kind: 'logo', url: '/logo-mark.png' },
     subtitle: Number(c.is_direct) ? 'Admin chat' : `Admin group · ${c.member_count} members`,
     company_name: null,
     last_at: c.last_message_at,

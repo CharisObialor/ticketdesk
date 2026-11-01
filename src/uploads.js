@@ -10,7 +10,10 @@ const transcriptsDir = path.join(config.storageDir, 'transcripts');
 fs.mkdirSync(uploadsDir, { recursive: true });
 fs.mkdirSync(transcriptsDir, { recursive: true });
 
-const BLOCKED = /\.(exe|bat|cmd|com|msi|msp|scr|pif|cpl|ps1|psm1|vb|vbs|vbe|js|jse|mjs|wsf|ws|wsh|jar|war|sh|bash|php\d?|phtml|phar|cgi|pl|py|rb|dll|sys|hta|lnk|reg|scf|jsp|jspx|asp|aspx|ashx|asmx|cfm|shtml|htaccess)$/i;
+// Files that run on a person's computer when opened (how malware spreads by attachment) are refused. Everything
+// else is allowed, including scripts and config files for servers: uploads are stored under random names outside
+// the website and always sent back as downloads, so the portal never runs them.
+const BLOCKED = /\.(exe|bat|cmd|com|msi|msp|mst|scr|pif|cpl|ps1|psm1|psd1|vb|vbs|vbe|js|jse|wsf|wsc|ws|wsh|jar|hta|lnk|reg|scf|dll|sys|msc|gadget|application|appref-ms|inf|url)$/i;
 
 // Browsers send UTF-8 filenames that busboy decodes as latin1; recover the original.
 function fixName(name) {

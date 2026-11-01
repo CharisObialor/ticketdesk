@@ -57,10 +57,11 @@ import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { ChatItem, ChatMessage, Company, Role } from '@/lib/types';
+import type { ChatItem, ChatMessage, Company, ConversationImage, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
 import { basename } from '@/lib/url-key';
 import { NewTeamChatDialog, TeamPane } from '@/components/team-chat';
+import { ConversationPicture } from '@/components/conversation-image';
 import { apiHref } from '@/lib/api';
 
 type Filter = 'all' | 'group' | 'ticket' | 'team';
@@ -71,6 +72,12 @@ export function useInbox() {
     queryFn: () => api.get<{ items: ChatItem[]; unread: number }>('/chats'),
     refetchInterval: 60_000,
   });
+}
+
+// The picture the inbox has for a conversation (company logo), for its header.
+function useInboxImage() {
+  const inbox = useInbox();
+  return (type: ChatItem['type'], id: number) => inbox.data?.items.find((i) => i.type === type && i.id === id)?.image ?? null;
 }
 
 export default function MessagesPage() {
@@ -304,14 +311,7 @@ function ConversationLink({ item: i, active, ...rest }: { item: ChatItem; active
   const preview = i.last_body ? (i.last_kind === 'system' || !i.last_user ? i.last_body : `${i.last_user}: ${i.last_body}`) : 'No messages yet';
   return (
     <Link {...rest} to={`/messages/${i.type}/${i.id}`} className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}>
-      <div
-        className={cn(
-          'flex size-10 shrink-0 items-center justify-center rounded-full',
-          i.type === 'ticket' ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'
-        )}
-      >
-        <Icon className="size-4" />
-      </div>
+      <ConversationPicture image={i.image} name={i.title} icon={Icon} muted={i.type === 'ticket'} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className={cn('truncate text-sm', i.unread ? 'font-semibold' : 'font-medium')}>{i.title}</span>
@@ -334,7 +334,19 @@ function ConversationLink({ item: i, active, ...rest }: { item: ChatItem; active
   );
 }
 
-function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Users; title: string; subtitle: string; actions?: ReactNode }) {
+function PaneHeader({
+  icon: Icon,
+  title,
+  subtitle,
+  actions,
+  image,
+}: {
+  icon: typeof Users;
+  title: string;
+  subtitle: string;
+  actions?: ReactNode;
+  image?: ConversationImage | null;
+}) {
   return (
     <div className="flex items-center gap-3 border-b px-4 py-3">
       <Button variant="ghost" size="icon-sm" className="md:hidden" asChild>
@@ -342,9 +354,7 @@ function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Use
           <ArrowLeft />
         </Link>
       </Button>
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Icon className="size-4" />
-      </div>
+      <ConversationPicture image={image} name={title} icon={Icon} className="size-9" />
       <div className="min-w-0 flex-1">
         <div className="truncate font-semibold">{title}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
@@ -357,6 +367,7 @@ function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Use
 // ---- Group conversation ----
 
 function GroupPane({ groupId }: { groupId: number }) {
+  const inboxImage = useInboxImage();
   const qc = useQueryClient();
   const { user } = useSession();
   const { groupTypingFor } = useRealtime();
@@ -398,6 +409,7 @@ function GroupPane({ groupId }: { groupId: number }) {
     <>
       <PaneHeader
         icon={Users}
+        image={inboxImage('group', group.id)}
         title={group.name}
         subtitle={`${group.company_name} · ${members.map((m) => (m.id === user?.id ? 'You' : m.name.split(' ')[0])).join(', ')}`}
         actions={
@@ -942,6 +954,7 @@ function AddMembersDialog({ data, onClose, onAdded }: { data: GroupData; onClose
 // ---- Ticket conversation (same thread as the ticket page) ----
 
 function TicketPane({ ticketId }: { ticketId: number }) {
+  const inboxImage = useInboxImage();
   const { isStaff } = useSession();
   const qc = useQueryClient();
   const query = useQuery({
@@ -972,6 +985,7 @@ function TicketPane({ ticketId }: { ticketId: number }) {
     <>
       <PaneHeader
         icon={TicketIcon}
+        image={inboxImage('ticket', t.id)}
         title={t.subject}
         subtitle={`#${t.id} · ${t.company_name}`}
         actions={

@@ -117,6 +117,9 @@ const groupChanged = async (groupId, extraUserIds = []) =>
 
 // ---- Inbox: group chats and ticket conversations in one list ----
 
+// The client company's logo as the conversation's picture (none when the company has no logo).
+const companyLogo = (row) => (row.company_logo ? { kind: 'logo', url: `/api/companies/${row.company_id}/logo?v=${row.company_logo}` } : null);
+
 router.get(
   '/',
   wrap(async (req, res) => {
@@ -126,7 +129,7 @@ router.get(
     const author = staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' THEN '${privacy.TEAM}' ELSE lu.name END`;
 
     const groups = await db.query(
-      `SELECT g.id, g.name, g.company_id, c.name AS company_name, g.created_by, g.last_message_at,
+      `SELECT g.id, g.name, g.company_id, c.name AS company_name, c.logo AS company_logo, g.created_by, g.last_message_at,
         CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END AS is_member,
         (SELECT COUNT(*) FROM chat_members x WHERE x.group_id = g.id) AS member_count,
         (SELECT cm.body FROM chat_messages cm WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_body,
@@ -151,7 +154,7 @@ router.get(
     // Unread counts only apply to tickets this user is following: ones they have opened, or that are theirs.
     const internal = staff ? '' : 'AND tm.is_internal = 0';
     const tickets = await db.query(
-      `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, t.last_activity_at,
+      `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, c.logo AS company_logo, t.last_activity_at,
         (SELECT tm.body FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_body,
         (SELECT tm.kind FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_kind,
         (SELECT ${staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' OR tm.kind = 'work_update' THEN '${privacy.TEAM}' ELSE lu.name END`} FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
@@ -171,6 +174,7 @@ router.get(
         type: 'group',
         id: g.id,
         title: g.name,
+        image: companyLogo(g),
         subtitle: `${g.company_name} · ${g.member_count} members`,
         company_name: g.company_name,
         last_at: g.last_message_at,
@@ -184,6 +188,7 @@ router.get(
         type: 'ticket',
         id: t.id,
         title: t.subject,
+        image: companyLogo(t),
         subtitle: `#${t.id} · ${t.company_name}`,
         company_name: t.company_name,
         status: t.status,
