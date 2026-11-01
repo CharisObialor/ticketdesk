@@ -195,6 +195,7 @@ router.get(
         unread: Number(t.unread) || 0,
         is_member: true,
       })),
+      ...(await require('./team').inboxItems(u)),
     ].sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
 
     res.json({ items, unread: items.reduce((s, i) => s + i.unread, 0) });

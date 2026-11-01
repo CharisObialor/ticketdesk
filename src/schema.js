@@ -286,6 +286,42 @@ CREATE TABLE IF NOT EXISTS sites (
   CONSTRAINT fk_sites_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS team_chats (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NULL,
+  is_direct TINYINT(1) NOT NULL DEFAULT 0,
+  direct_key VARCHAR(40) NULL,
+  created_by INT UNSIGNED NULL,
+  created_at DATETIME NOT NULL,
+  last_message_at DATETIME NOT NULL,
+  UNIQUE KEY uq_tc_direct (direct_key),
+  KEY idx_tc_last (last_message_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS team_chat_members (
+  chat_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  last_read_id INT UNSIGNED NOT NULL DEFAULT 0,
+  joined_at DATETIME NOT NULL,
+  PRIMARY KEY (chat_id, user_id),
+  KEY idx_tcm_user (user_id),
+  CONSTRAINT fk_tcm_chat FOREIGN KEY (chat_id) REFERENCES team_chats(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tcm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS team_messages (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  chat_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NULL,
+  body TEXT NOT NULL,
+  kind VARCHAR(16) NOT NULL DEFAULT 'message',
+  created_at DATETIME NOT NULL,
+  edited_at DATETIME NULL,
+  KEY idx_tm_chat (chat_id, id),
+  CONSTRAINT fk_tm_chat FOREIGN KEY (chat_id) REFERENCES team_chats(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id INT UNSIGNED NOT NULL,
@@ -447,6 +483,22 @@ CREATE TABLE IF NOT EXISTS sites (
   code TEXT NOT NULL, location TEXT, details TEXT, is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (company_id, code)
 );
+CREATE TABLE IF NOT EXISTS team_chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, is_direct INTEGER NOT NULL DEFAULT 0, direct_key TEXT UNIQUE,
+  created_by INTEGER, created_at TEXT NOT NULL, last_message_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tc_last ON team_chats(last_message_at);
+CREATE TABLE IF NOT EXISTS team_chat_members (
+  chat_id INTEGER NOT NULL REFERENCES team_chats(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_id INTEGER NOT NULL DEFAULT 0, joined_at TEXT NOT NULL, PRIMARY KEY (chat_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tcm_user ON team_chat_members(user_id);
+CREATE TABLE IF NOT EXISTS team_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL REFERENCES team_chats(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, body TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'message',
+  created_at TEXT NOT NULL, edited_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tm_chat ON team_messages(chat_id, id);
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT

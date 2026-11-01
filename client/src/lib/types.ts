@@ -275,11 +275,12 @@ export interface Company {
 }
 
 export interface ChatItem {
-  type: 'group' | 'ticket';
+  // 'team': admin-only chats.
+  type: 'group' | 'ticket' | 'team';
   id: number;
   title: string;
   subtitle: string;
-  company_name: string;
+  company_name: string | null;
   last_at: string;
   last_body: string | null;
   last_kind: 'message' | 'system' | null;

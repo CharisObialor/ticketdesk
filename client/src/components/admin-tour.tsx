@@ -284,6 +284,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Start a group with <B>New group</B>, then add people, rename it, or leave it from the members list.</>,
               <>Use the search box to find any conversation, or any message inside one.</>,
               <>Unread chats show a count in the sidebar, and messages appear live.</>,
+              <><B>Admin chat</B>: message other admins privately, one to one or in a group. Only admins see these, and they never send emails.</>,
               <>Your messages sit on the right, everyone else's on the left. Scrolled up to read? A button takes you back to the latest.</>,
             ]}
           />

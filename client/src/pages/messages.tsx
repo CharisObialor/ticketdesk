@@ -20,6 +20,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -59,9 +60,10 @@ import { cn } from '@/lib/utils';
 import type { ChatItem, ChatMessage, Company, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
 import { basename } from '@/lib/url-key';
+import { NewTeamChatDialog, TeamPane } from '@/components/team-chat';
 import { apiHref } from '@/lib/api';
 
-type Filter = 'all' | 'group' | 'ticket';
+type Filter = 'all' | 'group' | 'ticket' | 'team';
 
 export function useInbox() {
   return useQuery({
@@ -73,17 +75,21 @@ export function useInbox() {
 
 export default function MessagesPage() {
   const { type, id } = useParams();
-  const selected = type === 'group' || type === 'ticket' ? { type, id: Number(id) } : null;
+  const { isAdmin } = useSession();
+  const selected = type === 'group' || type === 'ticket' || (type === 'team' && isAdmin) ? { type, id: Number(id) } : null;
   const [creating, setCreating] = useState(false);
+  const [creatingTeam, setCreatingTeam] = useState(false);
 
   return (
     <Card className="h-[calc(100svh-9.5rem)] min-h-[480px] gap-0 overflow-hidden py-0 md:grid md:grid-cols-[340px_minmax(0,1fr)]">
       <div className={cn('flex min-h-0 flex-col border-r', selected ? 'hidden md:flex' : 'flex h-full')}>
-        <ConversationList selected={selected} onNewGroup={() => setCreating(true)} />
+        <ConversationList selected={selected} onNewGroup={() => setCreating(true)} onNewTeam={isAdmin ? () => setCreatingTeam(true) : undefined} />
       </div>
       <div className={cn('min-h-0 flex-col', selected ? 'flex h-full' : 'hidden md:flex')}>
         {selected?.type === 'group' ? (
           <GroupPane key={`g${selected.id}`} groupId={selected.id} />
+        ) : selected?.type === 'team' ? (
+          <TeamPane key={`a${selected.id}`} chatId={selected.id} />
         ) : selected?.type === 'ticket' ? (
           <TicketPane key={`t${selected.id}`} ticketId={selected.id} />
         ) : (
@@ -103,6 +109,7 @@ export default function MessagesPage() {
         )}
       </div>
       {creating && <NewGroupDialog onClose={() => setCreating(false)} />}
+      {creatingTeam && <NewTeamChatDialog onClose={() => setCreatingTeam(false)} />}
     </Card>
   );
 }
@@ -131,7 +138,7 @@ function Highlight({ text, term }: { text: string; term: string }) {
   );
 }
 
-function ConversationList({ selected, onNewGroup }: { selected: { type: string; id: number } | null; onNewGroup: () => void }) {
+function ConversationList({ selected, onNewGroup, onNewTeam }: { selected: { type: string; id: number } | null; onNewGroup: () => void; onNewTeam?: () => void }) {
   const inbox = useInbox();
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -160,10 +167,18 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
       <div className="space-y-3 border-b p-4">
         <div className="flex items-center justify-between">
           <h1 className="type-h3">Messages</h1>
-          <Button size="sm" onClick={onNewGroup}>
-            <Plus />
-            New group
-          </Button>
+          <div className="flex gap-1.5">
+            {onNewTeam && (
+              <Button size="sm" variant="outline" onClick={onNewTeam} title="Chat privately with other admins">
+                <ShieldCheck />
+                Admin chat
+              </Button>
+            )}
+            <Button size="sm" onClick={onNewGroup}>
+              <Plus />
+              New group
+            </Button>
+          </div>
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -171,9 +186,9 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
         </div>
         <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
           <TabsList className="w-full">
-            {(['all', 'group', 'ticket'] as Filter[]).map((f) => (
+            {(onNewTeam ? (['all', 'group', 'ticket', 'team'] as Filter[]) : (['all', 'group', 'ticket'] as Filter[])).map((f) => (
               <TabsTrigger key={f} value={f}>
-                {f === 'all' ? 'All' : f === 'group' ? 'Groups' : 'Tickets'}
+                {f === 'all' ? 'All' : f === 'group' ? 'Groups' : f === 'ticket' ? 'Tickets' : 'Admins'}
                 {unread(f) > 0 && <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{unread(f)}</span>}
               </TabsTrigger>
             ))}
@@ -190,9 +205,17 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
         ) : items.length === 0 && !hits.length ? (
           <EmptyState
             icon={term ? Search : filter === 'ticket' ? TicketIcon : Users}
-            title={term ? (searching ? 'Searching...' : 'No matches') : filter === 'group' ? 'No group conversations yet' : 'No conversations yet'}
+            title={
+              term ? (searching ? 'Searching...' : 'No matches') : filter === 'group' ? 'No group conversations yet' : filter === 'team' ? 'No admin chats yet' : 'No conversations yet'
+            }
             description={
-              term ? undefined : filter === 'ticket' ? 'Ticket conversations appear here.' : 'Start a group to chat with your colleagues and our support team.'
+              term
+                ? undefined
+                : filter === 'ticket'
+                  ? 'Ticket conversations appear here.'
+                  : filter === 'team'
+                    ? 'Use Admin chat to message other admins privately.'
+                    : 'Start a group to chat with your colleagues and our support team.'
             }
           />
         ) : (
@@ -277,14 +300,14 @@ function ConversationRow({ item: i, active }: { item: ChatItem; active: boolean 
 
 // The right-click menu passes its event handlers through these props onto the link.
 function ConversationLink({ item: i, active, ...rest }: { item: ChatItem; active: boolean } & HTMLAttributes<HTMLAnchorElement>) {
-  const Icon = i.type === 'group' ? Users : TicketIcon;
+  const Icon = i.type === 'group' ? Users : i.type === 'team' ? ShieldCheck : TicketIcon;
   const preview = i.last_body ? (i.last_kind === 'system' || !i.last_user ? i.last_body : `${i.last_user}: ${i.last_body}`) : 'No messages yet';
   return (
     <Link {...rest} to={`/messages/${i.type}/${i.id}`} className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}>
       <div
         className={cn(
           'flex size-10 shrink-0 items-center justify-center rounded-full',
-          i.type === 'group' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          i.type === 'ticket' ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'
         )}
       >
         <Icon className="size-4" />

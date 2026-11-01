@@ -131,6 +131,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
       );
     });
+    // Admin chats.
+    socket.on('team:message', ({ chatId, message }: { chatId: number; message: { id: number } }) => {
+      qc.setQueryData<{ messages: { id: number }[] }>(['team', chatId], (prev) =>
+        prev && !prev.messages.some((m) => m.id === message.id) ? { ...prev, messages: [...prev.messages, message] } : prev
+      );
+      qc.invalidateQueries({ queryKey: ['chats'] });
+    });
+    socket.on('team:updated', ({ chatId, message }: { chatId: number; message: { id: number } }) => {
+      qc.setQueryData<{ messages: { id: number }[] }>(['team', chatId], (prev) =>
+        prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
+      );
+    });
+    socket.on('team:read', ({ chatId, userId, lastReadId }: { chatId: number; userId: number; lastReadId: number }) => {
+      qc.setQueryData<{ members: { id: number; last_read_id: number }[] }>(['team', chatId], (prev) =>
+        prev ? { ...prev, members: prev.members.map((m) => (m.id === userId ? { ...m, last_read_id: lastReadId } : m)) } : prev
+      );
+    });
     socket.on('chat:updated', ({ groupId, message }: { groupId: number; message: ChatMessage }) => {
       qc.setQueryData<GroupData>(['group', groupId], (prev) =>
         prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
