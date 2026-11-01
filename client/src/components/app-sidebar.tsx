@@ -68,11 +68,11 @@ import { TEXT_SIZES, useTheme, type TextSize, type Theme } from '@/hooks/use-the
 import { api } from '@/lib/api';
 import { ROLE_LABELS } from '@/lib/format';
 import type { Counts } from '@/lib/types';
-import { useInbox } from '@/pages/messages';
+import { useInbox } from '@/hooks/use-inbox';
 import { useInstallPrompt } from '@/hooks/use-install';
-import { useActions } from '@/pages/actions';
+import { useActions } from '@/hooks/use-actions';
 import { useMailboxes } from '@/hooks/use-mailboxes';
-import { startTour } from '@/components/admin-tour';
+import { startTour } from '@/lib/tour';
 
 // Red bubbles for things waiting on you: unread messages, unread mail and actions.
 const UNREAD_BADGE = 'bg-red-600 text-white peer-hover/menu-button:text-white peer-data-[active=true]/menu-button:text-white';

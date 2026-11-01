@@ -24,7 +24,36 @@ const limiter = rateLimit({
 const DUMMY_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 11);
 
 const USER_SELECT =
-  'SELECT u.*, c.name AS company_name, c.is_active AS company_active, c.logo AS company_logo FROM users u LEFT JOIN companies c ON c.id = u.company_id';
+  'SELECT u.*, c.name AS company_name, c.is_active AS company_active, c.logo AS company_logo, c.site_contacts AS company_site_contacts FROM users u LEFT JOIN companies c ON c.id = u.company_id';
+
+// The signed-in person and what the portal needs to know about its setup (from /auth/me and sign-in).
+function sessionInfo(user, session) {
+  return {
+    // The key for page addresses (/<key>/...), for this sign-in.
+    urlKey: urlKeyFor(session),
+    user: publicUser(user),
+    app: {
+      name: config.appName,
+      company: config.companyName,
+      statuses: STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
+      priorities: PRIORITIES,
+      categories: user.role === 'client' ? require('../sla').categoryNames(user.company_id) : CATEGORIES,
+      upload: config.upload,
+      mailUpload: config.mailUpload,
+      workUpload: config.workUpload,
+      // Response and resolution targets, per company where a company has its own.
+      sla: require('../sla').forUser(user),
+      // Clients of companies that ask for the site's OM and FSE on each new ticket.
+      siteContacts: user.role === 'client' && !!Number(user.company_site_contacts),
+      autoCloseDays: config.autoCloseDays,
+      replyByEmail: config.inbound.enabled,
+      sessionIdleMinutes: config.sessionIdleMinutes,
+      // The admin's own Microsoft 365 mailbox for the Mail page and CC/BCC on replies (null when not available).
+      mailbox: require('./mail').mailboxFor(user),
+      ai: user.role === 'admin' && require('../ai').enabled(),
+    },
+  };
+}
 
 router.post(
   '/login',
@@ -40,9 +69,10 @@ router.post(
     if (!user.is_active || (user.role === 'client' && user.company_active === 0)) {
       throw new HttpError(403, 'This account has been disabled. Please contact support.');
     }
-    await db.query('UPDATE users SET last_login_at = ? WHERE id = ?', [now(), user.id]);
-    setSession(res, user);
-    res.json({ user: publicUser(user) });
+    user.last_login_at = now();
+    await db.query('UPDATE users SET last_login_at = ? WHERE id = ?', [user.last_login_at, user.id]);
+    // The same details as /auth/me, so the portal can open without asking again.
+    res.json(sessionInfo(user, setSession(res, user)));
   })
 );
 
@@ -146,31 +176,7 @@ router.get(
   '/me',
   requireAuth,
   wrap(async (req, res) => {
-    res.json({
-      // The key for page addresses (/<key>/...), for this sign-in.
-      urlKey: urlKeyFor(req.session),
-      user: publicUser(req.user),
-      app: {
-        name: config.appName,
-        company: config.companyName,
-        statuses: STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
-        priorities: PRIORITIES,
-        categories: req.user.role === 'client' ? require('../sla').categoryNames(req.user.company_id) : CATEGORIES,
-        upload: config.upload,
-        mailUpload: config.mailUpload,
-        workUpload: config.workUpload,
-        // Response and resolution targets, per company where a company has its own.
-        sla: require('../sla').forUser(req.user),
-        // Clients of companies that ask for the site's OM and FSE on each new ticket.
-        siteContacts: req.user.role === 'client' && !!Number(req.user.company_site_contacts),
-        autoCloseDays: config.autoCloseDays,
-        replyByEmail: config.inbound.enabled,
-        sessionIdleMinutes: config.sessionIdleMinutes,
-        // The admin's own Microsoft 365 mailbox for the Mail page and CC/BCC on replies (null when not available).
-        mailbox: require('./mail').mailboxFor(req.user),
-        ai: req.user.role === 'admin' && require('../ai').enabled(),
-      },
-    });
+    res.json(sessionInfo(req.user, req.session));
   })
 );
 

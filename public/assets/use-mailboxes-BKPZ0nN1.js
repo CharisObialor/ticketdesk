@@ -1,0 +1,1 @@
+import{C as e,W as t}from"./utils-CwcA6yDy.js";function n(n=!0){return t({queryKey:[`mail-mailboxes`],queryFn:()=>e.get(`/mail/mailboxes`),refetchInterval:3e4,retry:!1,enabled:n})}export{n as t};

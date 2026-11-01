@@ -1,5 +1,5 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
-import { Loader2 } from 'lucide-react';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -7,7 +7,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { CompanyLogo, Footer } from '@/components/common';
 import { NotificationBell } from '@/components/notification-bell';
 import { IdleTimeout } from '@/components/idle-timeout';
-import { AdminTour } from '@/components/admin-tour';
+import { FullPageLoader } from '@/components/full-page-loader';
 import { MailNotifier } from '@/components/mail-notifier';
 import { useSession } from '@/hooks/use-session';
 import { useNow } from '@/hooks/use-now';
@@ -15,13 +15,10 @@ import { RealtimeProvider, useRealtime } from '@/hooks/use-realtime';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 
-export function FullPageLoader() {
-  return (
-    <div className="flex min-h-svh items-center justify-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" />
-    </div>
-  );
-}
+export { FullPageLoader };
+
+// The tour is only needed once the portal is open, so it loads after the rest.
+const AdminTour = lazy(() => import('@/components/admin-tour').then((m) => ({ default: m.AdminTour })));
 
 function ConnectionStatus() {
   const { connected, presence } = useRealtime();
@@ -88,7 +85,9 @@ export function AppLayout() {
       <SidebarProvider>
         <AppSidebar />
         <IdleTimeout />
-        <AdminTour />
+        <Suspense fallback={null}>
+          <AdminTour />
+        </Suspense>
         <MailNotifier />
         <SidebarInset>
           <header className="sticky top-0 z-10 print:hidden flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -133,3 +132,5 @@ export function StaffOnly({ admin = false }: { admin?: boolean }) {
   if (admin ? !isAdmin : !isStaff) return <Navigate to="/" replace />;
   return <Outlet />;
 }
+
+export const AdminOnly = () => <StaffOnly admin />;

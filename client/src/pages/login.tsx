@@ -10,10 +10,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { BrandLogo, Footer } from '@/components/common';
 import { PasswordChecklist, PasswordInput } from '@/components/password-input';
 import { passwordOk } from '@/lib/password';
-import { FullPageLoader } from '@/components/app-layout';
+import { FullPageLoader } from '@/components/full-page-loader';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
 import { urlKeyInPath } from '@/lib/url-key';
+import type { AppMeta, User } from '@/lib/types';
 
 type Mode = 'signin' | 'forgot' | 'sent' | 'token';
 
@@ -175,8 +176,8 @@ function SignInForm({ onForgot }: { onForgot: () => void }) {
     setBusy(true);
     setError('');
     try {
-      await api.post('/auth/login', { email, password });
-      await qc.invalidateQueries({ queryKey: ['me'] });
+      // Sign-in answers with the same details as /auth/me, so the portal opens without a second request.
+      qc.setQueryData(['me'], await api.post<{ user: User; app: AppMeta; urlKey: string }>('/auth/login', { email, password }));
       // The session moves the address onto this sign-in's key (see use-session); this covers the same key.
       if (!urlKeyInPath) return;
       navigate(safeNext(params.get('next')), { replace: true });

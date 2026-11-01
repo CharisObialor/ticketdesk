@@ -63,16 +63,11 @@ import { basename } from '@/lib/url-key';
 import { NewTeamChatDialog, TeamPane } from '@/components/team-chat';
 import { ConversationPicture } from '@/components/conversation-image';
 import { apiHref } from '@/lib/api';
+import { useInbox } from '@/hooks/use-inbox';
 
 type Filter = 'all' | 'group' | 'ticket' | 'team';
 
-export function useInbox() {
-  return useQuery({
-    queryKey: ['chats'],
-    queryFn: () => api.get<{ items: ChatItem[]; unread: number }>('/chats'),
-    refetchInterval: 60_000,
-  });
-}
+export { useInbox };
 
 // The picture the inbox has for a conversation (company logo), for its header.
 function useInboxImage() {

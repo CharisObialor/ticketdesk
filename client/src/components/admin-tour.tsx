@@ -11,10 +11,7 @@ import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 import type { AppMeta, User } from '@/lib/types';
 
-const START_EVENT = 'tour:start';
-
-// Opens the tour again from anywhere (the user menu uses this).
-export const startTour = () => window.dispatchEvent(new Event(START_EVENT));
+import { TOUR_START_EVENT as START_EVENT } from '@/lib/tour';
 
 interface Step {
   title: string;

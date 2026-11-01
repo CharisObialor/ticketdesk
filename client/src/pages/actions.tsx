@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlarmClock,
   CalendarClock,
@@ -32,6 +32,7 @@ import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { useActions } from '@/hooks/use-actions';
 
 export interface ActionItem {
   key: string;
@@ -56,9 +57,7 @@ export interface ActionsData {
   counts: { urgent: number; high: number; normal: number; total: number };
 }
 
-export function useActions(enabled = true) {
-  return useQuery({ queryKey: ['actions'], queryFn: () => api.get<ActionsData>('/actions'), refetchInterval: 60_000, enabled });
-}
+export { useActions };
 
 const SEVERITY: Record<ActionItem['severity'], { label: string; className: string; bar: string }> = {
   urgent: { label: 'Urgent', className: 'bg-red-600 text-white', bar: 'bg-red-600' },

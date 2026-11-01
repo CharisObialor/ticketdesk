@@ -7,18 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { AppLayout, ClientOnly, HomeRedirect, StaffOnly } from '@/components/app-layout';
 import { basename, currentPath } from '@/lib/url-key';
 import { EmptyState } from '@/components/common';
 import { SessionProvider } from '@/hooks/use-session';
 import { ThemeProvider } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api';
 import LoginPage from '@/pages/login';
-import TicketsPage from '@/pages/tickets';
-import NewTicketPage from '@/pages/ticket-new';
-import TicketDetailPage from '@/pages/ticket-detail';
-import ProfilePage from '@/pages/profile';
-import MessagesPage from '@/pages/messages';
 import '@fontsource-variable/inter';
 import './index.css';
 
@@ -32,7 +26,8 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 15_000,
       refetchOnWindowFocus: true,
-      retry: (count, err) => !(err instanceof ApiError && err.status < 500) && count < 2,
+      // Retry server errors and dropped connections (status 0), not answers such as "not found" or "sign in".
+      retry: (count, err) => !(err instanceof ApiError && err.status > 0 && err.status < 500) && count < 2,
     },
   },
 });
@@ -66,7 +61,7 @@ function NotFound() {
   );
 }
 
-// Staff-only pages (and the chart library) load on demand, keeping the client bundle small.
+// Pages load on demand, so the sign-in screen opens without waiting for the rest of the portal.
 // After an update (or a dev server restart) an open tab can ask for a page file that no longer exists. Reload once
 // to pick up the current version instead of showing an error; the stamp stops a reload loop if the server is down.
 const RELOAD_KEY = 'page-load-retry';
@@ -99,22 +94,26 @@ function loadFresh<T>(load: () => Promise<T>): Promise<T> {
 
 const page = (load: () => Promise<{ default: ComponentType }>) => () => loadFresh(load).then((m) => ({ Component: m.default }));
 
+// The portal's frame (sidebar, header, live updates) and its page guards, loaded after the sign-in screen.
+const layout = (pick: (m: typeof import('@/components/app-layout')) => ComponentType) => () =>
+  loadFresh(() => import('@/components/app-layout')).then((m) => ({ Component: pick(m) }));
+
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
-    element: <AppLayout />,
+    lazy: layout((m) => m.AppLayout),
     // Shown for a moment when the portal opens straight onto an on-demand page (such as /dashboard).
     hydrateFallbackElement: <div className="min-h-svh bg-background" />,
     children: [
-      { index: true, element: <HomeRedirect /> },
-      { path: 'tickets', element: <TicketsPage /> },
-      { path: 'tickets/new', element: <NewTicketPage /> },
-      { path: 'tickets/:id', element: <TicketDetailPage /> },
-      { path: 'messages', element: <MessagesPage /> },
-      { path: 'messages/:type/:id', element: <MessagesPage /> },
-      { path: 'profile', element: <ProfilePage /> },
+      { index: true, lazy: layout((m) => m.HomeRedirect) },
+      { path: 'tickets', lazy: page(() => import('@/pages/tickets')) },
+      { path: 'tickets/new', lazy: page(() => import('@/pages/ticket-new')) },
+      { path: 'tickets/:id', lazy: page(() => import('@/pages/ticket-detail')) },
+      { path: 'messages', lazy: page(() => import('@/pages/messages')) },
+      { path: 'messages/:type/:id', lazy: page(() => import('@/pages/messages')) },
+      { path: 'profile', lazy: page(() => import('@/pages/profile')) },
       {
-        element: <ClientOnly />,
+        lazy: layout((m) => m.ClientOnly),
         children: [
           { path: 'home', lazy: page(() => import('@/pages/client-home')) },
           { path: 'sites', lazy: page(() => import('@/pages/client-sites')) },
@@ -122,7 +121,7 @@ const router = createBrowserRouter([
         ],
       },
       {
-        element: <StaffOnly />,
+        lazy: layout((m) => m.StaffOnly),
         children: [
           { path: 'dashboard', lazy: page(() => import('@/pages/dashboard')) },
           { path: 'companies', lazy: page(() => import('@/pages/companies')) },
@@ -135,7 +134,7 @@ const router = createBrowserRouter([
         ],
       },
       {
-        element: <StaffOnly admin />,
+        lazy: layout((m) => m.AdminOnly),
         children: [
           { path: 'system', lazy: page(() => import('@/pages/system')) },
           { path: 'mail', lazy: page(() => import('@/pages/mail')) },
@@ -156,6 +155,15 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     if (e.data && e.data.type === 'open' && typeof e.data.link === 'string' && e.data.link.startsWith('/')) router.navigate(e.data.link);
   });
 }
+
+// While someone reads the sign-in screen (or the first page), fetch the everyday pages in the background so they
+// open at once. Saved by the browser, so later visits skip the download.
+const warmUp = () => {
+  for (const load of [() => import('@/pages/tickets'), () => import('@/pages/ticket-detail'), () => import('@/pages/messages'), () => import('@/pages/ticket-new')]) {
+    load().catch(() => {});
+  }
+};
+window.addEventListener('load', () => ('requestIdleCallback' in window ? requestIdleCallback(warmUp, { timeout: 3000 }) : setTimeout(warmUp, 1500)));
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

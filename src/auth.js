@@ -41,6 +41,7 @@ const IDLE_MESSAGE = 'You were signed out after a period of inactivity. Please s
 // The token records when the person was last active (`act`). It is refreshed by /auth/heartbeat, which the
 // browser only calls on real activity (typing, clicking, scrolling), so background polling never keeps an
 // unattended session alive. Sessions also end after SESSION_DAYS regardless.
+// Signs the person in (session and CSRF cookies) and returns the session's claims.
 function setSession(res, user, { createdAt } = {}) {
   const claims = { uid: user.id, pv: passwordVersion(user), act: nowSec(), iat0: createdAt || nowSec() };
   const token = jwt.sign(claims, SIGNING_KEY, {
@@ -55,6 +56,7 @@ function setSession(res, user, { createdAt } = {}) {
     path: '/',
     domain: config.cookieDomain,
   });
+  return claims;
 }
 
 function clearSession(res) {

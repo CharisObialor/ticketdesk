@@ -68,7 +68,8 @@ async function main() {
           'Access-Control-Allow-Credentials': 'true',
           'Access-Control-Allow-Headers': 'Content-Type, X-CSRF-Token',
           'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE',
-          'Access-Control-Max-Age': '600',
+          // Browsers keep the answer to their pre-check this long (Chrome's ceiling) instead of asking before each change.
+          'Access-Control-Max-Age': '7200',
           Vary: 'Origin',
         });
       }
