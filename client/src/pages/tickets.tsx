@@ -281,7 +281,7 @@ export default function TicketsPage() {
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={t.status} />
-                        {t.status === 'resolved' && !!t.signoff_required && <div className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">Awaiting sign-off</div>}
+                        {isStaff && !!t.signoff_required && t.status !== 'closed' && <div className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-400">Awaiting sign-off</div>}
                       </TableCell>
                       <TableCell>
                         <PriorityBadge priority={t.priority} />

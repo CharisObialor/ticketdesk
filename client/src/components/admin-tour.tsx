@@ -165,8 +165,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Open</B>: just arrived.</>,
               <><B>In progress</B>: someone's working on it.</>,
               <><B>Awaiting client</B>: ball's in their court (we asked them something).</>,
-              <><B>Resolved</B>: we think it's fixed. The client gets an email asking them to rate us.</>,
-              <><B>Closed</B>: finished, but only after <B>sign-off</B>. When anyone marks a ticket resolved, the other admins get an email asking them to check it. Once two of them approve, it closes. Anyone can send it back with a reason instead.</>,
+              <><B>Resolved</B>: fixed and <B>signed off</B>. When anyone marks a ticket resolved, it stays as it is while the other admins are asked to check it. Once two of them approve, it becomes Resolved, the resolution time is recorded, and the client gets an email asking them to rate us. Anyone can send it back with a reason instead.</>,
+              <><B>Closed</B>: finished. Resolved tickets close by themselves after a few quiet days, or an admin can close them.</>,
             ]}
           />
           <P>Priority decides how fast we've promised to respond (our default SLA):</P>

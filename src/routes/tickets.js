@@ -244,7 +244,7 @@ router.get(
     // Visit notes are instructions for the technician (access codes, contacts), so clients do not get them.
     const visibleVisits = staff ? visits : visits.map((v) => ({ ...v, notes: null, created_by: null }));
     const timeSpent = messages.reduce((n, m) => n + (Number(m.time_spent_min) || 0), 0);
-    res.json({ ticket: t, messages, transcripts, reads, rating, adminRatings, visits: visibleVisits, timeSpent, signoff: staff ? await signoff.state(t) : { active: signoff.pending(t) } });
+    res.json({ ticket: t, messages, transcripts, reads, rating, adminRatings, visits: visibleVisits, timeSpent, signoff: staff ? await signoff.state(t) : { active: false } });
   })
 );
 
@@ -449,16 +449,23 @@ router.patch(
     let statusTo = null;
     let assignee = null;
 
-    if (b.status !== undefined && b.status !== t.status) {
+    // Marking resolved goes through sign-off: the ticket keeps its status (and the client hears nothing) until the
+    // other admins approve. A lone admin, with nobody to sign off, resolves straight away.
+    let askSignoff = false;
+    if (b.status === 'resolved' && staff && b.status !== t.status) {
+      if (signoff.pending(t)) throw new HttpError(409, 'This ticket is already waiting for sign-off.');
+      if ((await signoff.requiredFor(u.id)) > 0) askSignoff = true;
+    }
+    if (b.status !== undefined && b.status !== t.status && !askSignoff) {
       if (!STATUSES.includes(b.status)) throw new HttpError(400, 'Invalid status');
       // Clients can reopen a resolved ticket, but only our team marks a ticket resolved.
       const clientAllowed = b.status === 'open' && t.status === 'resolved';
       if (!staff && !clientAllowed) throw new HttpError(403, 'You cannot make that change');
-      // Closing goes through sign-off: mark the ticket resolved and other admins approve it.
-      if (b.status === 'closed' && (await signoff.requiredFor(u.id)) > 0) {
+      // A ticket is closed once it has been resolved (after sign-off), not straight from open.
+      if (b.status === 'closed' && t.status !== 'resolved' && (await signoff.requiredFor(u.id)) > 0) {
         throw new HttpError(409, signoff.pending(t)
-          ? 'This ticket is waiting for sign-off. It closes once the other admins approve it.'
-          : 'Mark the ticket as Resolved first. It closes once two other admins sign it off.');
+          ? 'This ticket is waiting for sign-off. It is resolved once the other admins approve it, and can be closed after that.'
+          : 'Mark the ticket as Resolved first. It is resolved once the other admins sign it off, and can be closed after that.');
       }
       fields.status = b.status;
       fields.resolved_at = ['resolved', 'closed'].includes(b.status) ? t.resolved_at || now() : null;
@@ -523,8 +530,8 @@ router.patch(
       await svc.teamNote(updated, u, 'Escalation cleared.');
     }
 
-    // A new resolution asks the other admins to sign off before the ticket can close.
-    if (statusTo === 'resolved') updated = await signoff.start(updated, u);
+    // Ask the other admins to sign off the resolution.
+    if (askSignoff) updated = await signoff.start(updated, u);
 
     if (statusTo) {
       notify.statusChanged(updated, u, t.status, statusTo, staff);
@@ -628,7 +635,7 @@ router.post(
     const t = await loadTicket(req);
     const decision = req.body.decision === 'approve' ? 'approved' : req.body.decision === 'reject' ? 'rejected' : null;
     const result = await signoff.decide(t, req.user, decision, clean(req.body.comment, 2000));
-    res.json({ ticket: result.ticket, closed: result.closed, signoff: await signoff.state(result.ticket) });
+    res.json({ ticket: result.ticket, resolved: result.resolved, closed: result.closed, signoff: await signoff.state(result.ticket) });
   })
 );
 

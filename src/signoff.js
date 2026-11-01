@@ -1,9 +1,10 @@
-// Closing a ticket needs a second (and third) pair of eyes: when a ticket is marked resolved, the other admins are
-// asked to sign off, and it closes once two of them approve. Any admin can send it back with a reason instead.
+// Resolving a ticket needs a second (and third) pair of eyes: when someone marks a ticket resolved, the ticket keeps
+// its status and the other admins are asked to sign off. Only once two of them approve is it resolved: the resolution
+// time is recorded and the client is told (and asked to rate). Any admin can send it back with a reason instead.
 // With fewer admins, every other admin is needed (one other admin: one approval; a lone admin: none).
-// Each resolution is a new "round", so approvals from before a reopen never count towards a later close.
+// Each request is a new "round", so approvals from an earlier round never count towards a later one.
 const db = require('./db');
-const { now, HttpError } = require('./util');
+const { now, HttpError, STATUS_LABELS } = require('./util');
 
 const APPROVALS_NEEDED = 2;
 
@@ -13,7 +14,8 @@ async function requiredFor(requesterId) {
   return Math.min(APPROVALS_NEEDED, Number(row.n) || 0);
 }
 
-const pending = (t) => t.status === 'resolved' && Number(t.signoff_required) > 0;
+// Waiting for sign-off: a round is open (signoff_required is cleared when it is approved or sent back).
+const pending = (t) => Number(t.signoff_required) > 0 && t.status !== 'closed';
 
 async function decisions(t) {
   return db.query(
@@ -41,7 +43,7 @@ module.exports = { requiredFor, pending, decisions, state, APPROVALS_NEEDED };
 
 // Late requires: these modules depend on the ticket service, which is loaded after this one.
 Object.assign(module.exports, {
-  // A ticket has just been marked resolved: open a new round and ask the other admins.
+  // Someone marked the ticket resolved: open a new round and ask the other admins. The ticket keeps its status.
   async start(t, actor) {
     const svc = require('./services/tickets');
     const notify = require('./notify');
@@ -54,7 +56,7 @@ Object.assign(module.exports, {
     });
     if (required > 0) {
       await svc.addMessage(updated, actor, {
-        body: `Waiting for sign-off from ${required === 1 ? 'another admin' : `${required} other admins`} before this ticket can close.`,
+        body: `${actor ? actor.name : 'Someone'} marked this ticket resolved. Waiting for sign-off from ${required === 1 ? 'another admin' : `${required} other admins`} before it is resolved and the client is told.`,
         internal: true,
         kind: 'system',
       });
@@ -82,25 +84,42 @@ Object.assign(module.exports, {
       now(),
     ]);
 
+    // Tickets resolved under the old flow had already told the client; new ones never did.
+    const legacy = t.status === 'resolved';
     if (decision === 'rejected') {
-      const updated = await svc.touch(t.id, { status: 'in_progress', resolved_at: null });
+      const updated = await svc.touch(t.id, legacy ? { status: 'in_progress', resolved_at: null, signoff_required: 0 } : { signoff_required: 0 });
       await svc.addMessage(updated, user, { body: `${user.name} sent this ticket back instead of signing it off: ${comment}`, internal: true, kind: 'system' });
-      await svc.systemMessage(updated, user, 'Status changed from Resolved to In progress.');
+      if (legacy) {
+        await svc.systemMessage(updated, user, 'Status changed from Resolved to In progress.');
+        notify.statusChanged(updated, user, 'resolved', 'in_progress', true);
+      }
       notify.signoffRejected(updated, user, comment);
-      notify.statusChanged(updated, user, 'resolved', 'in_progress', true);
-      return { ticket: updated, closed: false };
+      return { ticket: updated, resolved: false, closed: false };
     }
 
     const approvals = (await decisions(t)).filter((r) => r.decision === 'approved');
     await svc.addMessage(t, user, { body: `${user.name} signed off (${approvals.length} of ${t.signoff_required}).${comment ? ` ${comment}` : ''}`, internal: true, kind: 'system' });
-    if (approvals.length < Number(t.signoff_required)) return { ticket: await svc.getTicket(t.id), closed: false };
+    if (approvals.length < Number(t.signoff_required)) return { ticket: await svc.getTicket(t.id), resolved: false, closed: false };
 
-    const updated = await svc.touch(t.id, { status: 'closed' });
-    await svc.addMessage(updated, null, { body: `Closed after sign-off by ${approvals.map((a) => a.name).join(' and ')}.`, internal: true, kind: 'system' });
-    await svc.systemMessage(updated, user, 'Status changed from Resolved to Closed.');
-    notify.signoffCompleted(updated, approvals.map((a) => a.name));
-    notify.statusChanged(updated, user, 'resolved', 'closed', true);
-    svc.archiveTranscript(updated, user, 'closed').catch((err) => console.error('[transcript] archive failed', err));
-    return { ticket: updated, closed: true };
+    const names = approvals.map((a) => a.name);
+    if (legacy) {
+      // Old flow: the ticket was already resolved and the client told; sign-off closes it.
+      const updated = await svc.touch(t.id, { status: 'closed', signoff_required: 0 });
+      await svc.addMessage(updated, null, { body: `Closed after sign-off by ${names.join(' and ')}.`, internal: true, kind: 'system' });
+      await svc.systemMessage(updated, user, 'Status changed from Resolved to Closed.');
+      notify.signoffCompleted(updated, names, 'closed');
+      notify.statusChanged(updated, user, 'resolved', 'closed', true);
+      svc.archiveTranscript(updated, user, 'closed').catch((err) => console.error('[transcript] archive failed', err));
+      return { ticket: updated, resolved: true, closed: true };
+    }
+    // Signed off: now it is resolved. The resolution time is recorded and the client is told and asked to rate.
+    const from = t.status;
+    const updated = await svc.touch(t.id, { status: 'resolved', resolved_at: now(), signoff_required: 0 });
+    await svc.addMessage(updated, null, { body: `Resolved after sign-off by ${names.join(' and ')}.`, internal: true, kind: 'system' });
+    await svc.systemMessage(updated, user, `Status changed from ${STATUS_LABELS[from] || from} to Resolved.`);
+    notify.signoffCompleted(updated, names, 'resolved');
+    notify.statusChanged(updated, user, from, 'resolved', true);
+    svc.archiveTranscript(updated, user, 'resolved').catch((err) => console.error('[transcript] archive failed', err));
+    return { ticket: updated, resolved: true, closed: false };
   },
 });

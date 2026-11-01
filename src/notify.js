@@ -361,7 +361,7 @@ module.exports = {
       icon: 'check',
       status: 'resolved',
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor ? actor.name : 'The client'} marked ticket #${t.id} as resolved. It needs sign-off from ${required === 1 ? 'one admin' : `${required} admins`} before it can close.`,
+      intro: `${actor ? actor.name : 'Someone'} marked ticket #${t.id} as resolved. It needs sign-off from ${required === 1 ? 'one admin' : `${required} admins`} before it is resolved and the client is told.`,
       paragraphs: ['Please check the resolution, then approve it or send it back with a reason.'],
       details: details(t, { internal: true }),
       quote: lastReply ? excerpt(lastReply.body) : null,
@@ -380,7 +380,7 @@ module.exports = {
       inAppTitle: `#${t.id} sent back by ${actor.name}`,
       icon: 'alert',
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor.name} did not sign off ticket #${t.id}, so it is back in progress.`,
+      intro: `${actor.name} did not sign off ticket #${t.id}, so it stays open. The client was not told it had been resolved.`,
       quote: reason,
       quoteLabel: 'Reason',
       quoteFrom: actor.name,
@@ -390,16 +390,19 @@ module.exports = {
     }), { ticket: t, ticketId: t.id, kind: 'signoff' });
   },
 
-  async signoffCompleted(t, approvers) {
+  async signoffCompleted(t, approvers, outcome = 'resolved') {
     const recipients = [await activeUser(t.signoff_requested_by), await activeUser(t.assigned_to)];
     sendEach(recipients, null, (r) => ({
-      subject: `[Ticket #${t.id}] Signed off and closed: ${t.subject}`,
-      heading: 'Ticket signed off and closed',
-      inAppTitle: `#${t.id} signed off and closed`,
+      subject: `[Ticket #${t.id}] Signed off and ${outcome}: ${t.subject}`,
+      heading: `Ticket signed off and ${outcome}`,
+      inAppTitle: `#${t.id} signed off and ${outcome}`,
       icon: 'check',
-      status: 'closed',
+      status: outcome,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now closed.`,
+      intro:
+        outcome === 'resolved'
+          ? `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now resolved and the client has been told.`
+          : `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now closed.`,
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'View ticket',

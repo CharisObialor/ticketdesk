@@ -20,7 +20,13 @@ import { cn } from '@/lib/utils';
 import type { Visit } from '@/lib/types';
 
 const dayFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-const dayKey = (ts: string) => parseTs(ts)!.toDateString();
+// Local calendar day as 'YYYY-M-D', read back with new Date(y, m, d), which every browser handles the same way.
+const localKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+const dayKey = (ts: string) => localKey(parseTs(ts) ?? new Date());
+const keyDate = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
 
 export default function VisitsPage() {
   const { isAdmin } = useSession();
@@ -41,7 +47,7 @@ export default function VisitsPage() {
     if (last && last[0] === k) last[1].push(v);
     else days.push([k, [v]]);
   }
-  const today = new Date().toDateString();
+  const today = localKey(new Date());
 
   return (
     <>
@@ -81,7 +87,7 @@ export default function VisitsPage() {
             <section key={key} className="space-y-2">
               <h2 className={cn('text-sm font-medium', key === today ? 'text-primary' : 'text-muted-foreground')}>
                 {key === today ? 'Today · ' : ''}
-                {dayFmt.format(new Date(key))}
+                {dayFmt.format(keyDate(key))}
               </h2>
               <div className="grid gap-2">
                 {list.map((v) => (

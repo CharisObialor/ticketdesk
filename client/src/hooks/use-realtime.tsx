@@ -57,7 +57,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    const socket = API_BASE ? io(API_BASE, { withCredentials: true }) : io({ withCredentials: true });
+    // The live host's web server does not pass WebSockets through to the API, so the separate API is reached with
+    // ordinary requests (long-polling) from the start instead of failing an upgrade on every page.
+    const socket = API_BASE ? io(API_BASE, { withCredentials: true, transports: ['polling'] }) : io({ withCredentials: true });
     socketRef.current = socket;
 
     const refreshLists = () => {

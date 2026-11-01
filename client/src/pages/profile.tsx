@@ -154,7 +154,7 @@ const PREF_ROWS: { key: string; label: string; hint: string; staffOnly?: boolean
   { key: 'assignments', label: 'Assignments', hint: 'A ticket is assigned to you.', staffOnly: true },
   { key: 'escalations', label: 'Escalations', hint: 'A ticket is escalated.', staffOnly: true },
   { key: 'ratings', label: 'Ratings', hint: 'A client rates a ticket or rates you.', staffOnly: true },
-  { key: 'signoffs', label: 'Sign-offs', hint: 'A resolved ticket needs your sign-off.', staffOnly: true },
+  { key: 'signoffs', label: 'Sign-offs', hint: 'A ticket marked resolved needs your sign-off.', staffOnly: true },
 ];
 
 // Choose, per kind of notification, whether it comes by email, in the bell, or both.

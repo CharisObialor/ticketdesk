@@ -1,9 +1,16 @@
 import type { Priority, Status } from './types';
 
-// The server stores UTC timestamps as 'YYYY-MM-DD HH:MM:SS'.
+// The server stores UTC timestamps as 'YYYY-MM-DD HH:MM:SS' and dates as 'YYYY-MM-DD'; some values arrive as full
+// ISO strings. Each shape is read explicitly: Safari (iPhone) rejects anything loose, such as '2026-10-01Z'.
+// Returns null for anything that is not a real date, so callers never format an invalid one.
 export function parseTs(s: string | null | undefined): Date | null {
   if (!s) return null;
-  return new Date(s.replace(' ', 'T') + 'Z');
+  const v = String(s).trim();
+  let d: Date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) d = new Date(`${v}T00:00:00Z`);
+  else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) d = new Date(`${v.replace(' ', 'T')}Z`);
+  else d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 const dateTimeFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });

@@ -201,7 +201,7 @@ async function computeActions() {
   const awaiting = await db.query(
     `SELECT t.id, t.subject, t.signoff_round, t.signoff_required, t.signoff_requested_by, t.signoff_requested_at, c.name AS company_name, u.name AS requester
      FROM tickets t JOIN companies c ON c.id = t.company_id LEFT JOIN users u ON u.id = t.signoff_requested_by
-     WHERE t.status = 'resolved' AND t.signoff_required > 0`
+     WHERE t.signoff_required > 0 AND t.status <> 'closed'`
   );
   for (const t of awaiting) {
     const done = await db.query("SELECT user_id, decision FROM ticket_signoffs WHERE ticket_id = ? AND round = ?", [t.id, t.signoff_round]);

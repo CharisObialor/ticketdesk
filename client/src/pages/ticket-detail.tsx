@@ -1024,14 +1024,16 @@ function SignoffCard({ ticket: t, signoff, isStaff }: { ticket: Ticket; signoff:
   const [comment, setComment] = useState('');
   const [sendingBack, setSendingBack] = useState(false);
   const decide = useMutation({
-    mutationFn: (decision: 'approve' | 'reject') => api.post<{ closed: boolean }>(`/tickets/${t.id}/signoff`, { decision, comment }),
+    mutationFn: (decision: 'approve' | 'reject') => api.post<{ resolved: boolean; closed: boolean }>(`/tickets/${t.id}/signoff`, { decision, comment }),
     onSuccess: (r, decision) => {
       toast.success(
         decision === 'reject'
-          ? 'Sent back. The ticket is in progress again.'
+          ? 'Sent back. The ticket stays open.'
           : r.closed
             ? 'Signed off. The ticket is now closed.'
-            : 'Signed off. Waiting for another admin.',
+            : r.resolved
+              ? 'Signed off. The ticket is resolved and the client has been told.'
+              : 'Signed off. Waiting for another admin.',
       );
       setComment('');
       setSendingBack(false);
@@ -1070,7 +1072,7 @@ function SignoffCard({ ticket: t, signoff, isStaff }: { ticket: Ticket; signoff:
       <CardContent className="space-y-3 text-sm">
         <p className="text-muted-foreground">
           {signoff.requestedBy ? `${signoff.requestedBy.name} marked this resolved` : 'Marked resolved'}
-          {signoff.requestedAt ? ` ${timeAgo(signoff.requestedAt)}` : ''}. It closes once{' '}
+          {signoff.requestedAt ? ` ${timeAgo(signoff.requestedAt)}` : ''}. It is resolved, and the client told, once{' '}
           {required === 1 ? 'another admin approves' : `${required} other admins approve`}.
         </p>
         <div className="flex items-center gap-2">
