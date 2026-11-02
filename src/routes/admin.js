@@ -615,4 +615,20 @@ router.delete(
   })
 );
 
+// Clears every ticket on the platform (with its conversations, files, visits, ratings and to-dos) after taking a
+// backup. The person types the confirmation phrase; without a good backup nothing is deleted.
+const CLEAR_PHRASE = 'CLEAR ALL TICKETS';
+router.post(
+  '/system/clear-tickets',
+  requireOwner,
+  wrap(async (req, res) => {
+    if (String(req.body.confirm || '').trim() !== CLEAR_PHRASE) throw new HttpError(400, `Type ${CLEAR_PHRASE} to confirm`);
+    const saved = await require('../backup').run('before clearing all tickets');
+    if (!saved.ok) throw new HttpError(500, `Nothing was deleted: the backup failed (${saved.error})`);
+    const done = await require('../purge').clearAllTickets();
+    deletion('all tickets', `(${done.tickets} tickets, ${done.files} files; backup ${saved.name})`, req.user);
+    res.json({ ok: true, ...done, backup: saved.name });
+  })
+);
+
 module.exports = router;

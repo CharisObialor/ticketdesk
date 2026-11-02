@@ -167,21 +167,30 @@ function ConversationList({ selected, onNewGroup, onNewTeam }: { selected: { typ
   return (
     <>
       <div className="space-y-3 border-b p-4">
-        <div className="flex items-center justify-between">
-          <h1 className="type-h3">Messages</h1>
-          <div className="flex gap-1.5">
-            {onNewTeam && (
+        {onNewTeam ? (
+          // Admins have two buttons: they get their own row so neither crowds the title or runs past the panel edge.
+          <>
+            <h1 className="type-h3">Messages</h1>
+            <div className="grid grid-cols-2 gap-2">
               <Button size="sm" variant="outline" onClick={onNewTeam} title="Chat privately with other admins">
                 <ShieldCheck />
                 Admin chat
               </Button>
-            )}
+              <Button size="sm" onClick={onNewGroup}>
+                <Plus />
+                New group
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="type-h3">Messages</h1>
             <Button size="sm" onClick={onNewGroup}>
               <Plus />
               New group
             </Button>
           </div>
-        </div>
+        )}
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder="Search conversations" className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -189,9 +198,12 @@ function ConversationList({ selected, onNewGroup, onNewTeam }: { selected: { typ
         <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
           <TabsList className="w-full">
             {(onNewTeam ? (['all', 'group', 'ticket', 'team'] as Filter[]) : (['all', 'group', 'ticket'] as Filter[])).map((f) => (
-              <TabsTrigger key={f} value={f}>
+              // Four tabs with unread counts share a narrow panel: tighter spacing so none is cut off.
+              <TabsTrigger key={f} value={f} className="min-w-0 flex-auto gap-1 px-1 text-[13px]">
                 {f === 'all' ? 'All' : f === 'group' ? 'Groups' : f === 'ticket' ? 'Tickets' : 'Admins'}
-                {unread(f) > 0 && <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{unread(f)}</span>}
+                {unread(f) > 0 && (
+                  <span className="rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground tabular-nums">{unread(f) > 99 ? '99+' : unread(f)}</span>
+                )}
               </TabsTrigger>
             ))}
           </TabsList>

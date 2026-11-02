@@ -162,4 +162,9 @@ function disconnectUser(userId) {
   if (io) io.in(`user:${userId}`).disconnectSockets(true);
 }
 
-module.exports = { init, presence, toTicket, toUsers, isOnline, disconnectUser };
+// Sends to every open tab (staff and clients).
+function toEveryone(event, payload) {
+  if (io) io.emit(event, payload);
+}
+
+module.exports = { init, presence, toTicket, toUsers, isOnline, disconnectUser, toEveryone };

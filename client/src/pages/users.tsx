@@ -19,11 +19,34 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { EmptyState, PageHeader, UserAvatar } from '@/components/common';
 import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
 import { useSession } from '@/hooks/use-session';
+import { useRealtime } from '@/hooks/use-realtime';
+import { cn } from '@/lib/utils';
 import { api, errorMessage, qs } from '@/lib/api';
 import { ROLE_LABELS, timeAgo } from '@/lib/format';
 import type { Company, Role, User } from '@/lib/types';
 
 const ALL = 'all';
+
+// Online now, or offline with when the person last had the portal open.
+function OnlineStatus({ online, lastSeen }: { online: boolean; lastSeen: string | null }) {
+  if (online) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+        <span className="size-2 rounded-full bg-emerald-500" />
+        Online
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex flex-col text-sm">
+      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+        <span className="size-2 rounded-full bg-muted-foreground/40" />
+        Offline
+      </span>
+      <span className="pl-3.5 text-xs text-muted-foreground">{lastSeen ? `Seen ${timeAgo(lastSeen)}` : 'Never signed in'}</span>
+    </span>
+  );
+}
 
 export default function UsersPage() {
   const { isAdmin, user: me } = useSession();
@@ -36,6 +59,10 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<User | 'new' | null>(null);
   const [deleting, setDeleting] = useState<User | null>(null);
+  // Who has the portal open right now, on any device (live, from the server).
+  const { presence } = useRealtime();
+  const online = new Set((presence?.users ?? []).map((p) => p.id));
+  if (me) online.add(me.id);
   // The owner can delete any account permanently, except their own.
   const canDelete = (u: User) => isOwner && u.id !== me?.id;
   const qc = useQueryClient();
@@ -125,6 +152,7 @@ export default function UsersPage() {
                 <TableHead className="pl-4">Name</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead className="hidden md:table-cell">Company</TableHead>
+                <TableHead className="hidden sm:table-cell">Online</TableHead>
                 <TableHead className="hidden lg:table-cell">Last sign-in</TableHead>
                 <TableHead className="hidden sm:table-cell">Status</TableHead>
                 {isAdmin && <TableHead className="w-12 pr-4" />}
@@ -137,7 +165,17 @@ export default function UsersPage() {
                     <TableRow>
                       <TableCell className="pl-4">
                         <div className="flex items-center gap-3">
-                          <UserAvatar name={u.name} userId={u.id} />
+                          <span className="relative shrink-0">
+                            <UserAvatar name={u.name} userId={u.id} />
+                            <span
+                              className={cn(
+                                'absolute right-0 bottom-0 size-2.5 rounded-full ring-2 ring-background',
+                                online.has(u.id) ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                              )}
+                              title={online.has(u.id) ? 'Online' : 'Offline'}
+                            />
+                            <span className="sr-only">{online.has(u.id) ? 'Online' : 'Offline'}</span>
+                          </span>
                           <div className="min-w-0">
                             <div className="truncate font-medium">
                               {u.name}
@@ -159,6 +197,9 @@ export default function UsersPage() {
                         <Badge variant={u.role === 'client' ? 'outline' : 'secondary'}>{ROLE_LABELS[u.role]}</Badge>
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground md:table-cell">{u.company_name ?? '-'}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <OnlineStatus online={online.has(u.id)} lastSeen={u.last_seen_at ?? u.last_login_at} />
+                      </TableCell>
                       <TableCell className="hidden text-muted-foreground lg:table-cell">{u.last_login_at ? timeAgo(u.last_login_at) : 'Never'}</TableCell>
                       <TableCell className="hidden sm:table-cell">
                         {!u.is_active ? (

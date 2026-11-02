@@ -74,4 +74,31 @@ async function deleteCompany(companyId) {
   return { name: company.name, ...usage };
 }
 
-module.exports = { deleteTicket, deleteUser, deleteCompany, companyUsage };
+// To-do kinds that are about a ticket (or its visit, rating or sign-off).
+const TICKET_ACTIONS = ['sla', 'ttr', 'unassigned', 'escalated', 'waiting', 'stale', 'signoff', 'visit', 'rating'];
+
+// Every ticket on the platform and what comes with them, for a fresh start: numbering begins again at #1, and reply
+// addresses from older emails stop working. Companies, people, sites, technicians and chats stay.
+async function clearAllTickets() {
+  const tickets = Number((await db.one('SELECT COUNT(*) AS n FROM tickets')).n);
+  const files = (await db.query('SELECT stored_name FROM attachments')).map((r) => r.stored_name);
+  const transcripts = (await db.query('SELECT filename FROM transcripts')).map((r) => r.filename);
+  await db.query("DELETE FROM notifications WHERE link LIKE '/tickets/%' OR link LIKE '/visits/%'");
+  await db.query(`DELETE FROM action_states WHERE ${TICKET_ACTIONS.map(() => 'action_key LIKE ?').join(' OR ')}`, TICKET_ACTIONS.map((k) => `${k}:%`));
+  // Ticket emails still waiting to go out (held for an admin who is away, or retrying) are about tickets that are gone.
+  await db.query("DELETE FROM mail_outbox WHERE status <> 'sent' AND subject LIKE '%[Ticket #%'");
+  await db.query('DELETE FROM tickets');
+  if (db.dialect() === 'mysql') await db.query('ALTER TABLE tickets AUTO_INCREMENT = 1');
+  else await db.query("DELETE FROM sqlite_sequence WHERE name = 'tickets'").catch(() => {});
+  const epoch = String(Date.now());
+  const ts = require('./util').now();
+  const updated = await db.query("UPDATE settings SET value = ?, updated_at = ? WHERE name = 'reply_epoch'", [epoch, ts]);
+  if (!updated.affectedRows) await db.query("INSERT INTO settings (name, value, updated_at) VALUES ('reply_epoch', ?, ?)", [epoch, ts]);
+  require('./replyto').setEpoch(epoch);
+  unlinkAll(uploadsDir, files);
+  unlinkAll(transcriptsDir, transcripts);
+  realtime.toEveryone('tickets:cleared', {});
+  return { tickets, files: files.length + transcripts.length };
+}
+
+module.exports = { deleteTicket, deleteUser, deleteCompany, companyUsage, clearAllTickets };

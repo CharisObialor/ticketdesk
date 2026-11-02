@@ -125,7 +125,10 @@ async function processMessage(parsed) {
   if (!ticket && !senderVerified(parsed)) return `ignored: sender ${fromAddr} could not be verified (no SPF/DKIM/DMARC pass)`;
   if (!ticket) {
     const m = /\[Ticket #(\d+)\]/i.exec(parsed.subject || '');
-    if (m) ticket = await svc.getTicket(Number(m[1]));
+    const found = m && (await svc.getTicket(Number(m[1])));
+    // Only when the subject also matches, so a reply to an old email cannot land on a newer ticket with that number.
+    const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (found && norm(parsed.subject).includes(norm(found.subject).slice(0, 60))) ticket = found;
   }
   if (ticket && !canAccessTicket(user, ticket)) return 'ignored: no access to ticket';
 

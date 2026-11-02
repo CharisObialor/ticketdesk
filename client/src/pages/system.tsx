@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, CircleCheck, DatabaseBackup, Download, Loader2, Lock, Mail, MailOpen, Timer } from 'lucide-react';
+import { CircleAlert, CircleCheck, DatabaseBackup, Download, Loader2, Lock, Mail, MailOpen, Timer, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,6 +8,8 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PageHeader } from '@/components/common';
+import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
+import { useSession } from '@/hooks/use-session';
 import { DefaultSlaCard } from '@/components/sla-editor';
 import { EscalationRulesCard } from '@/components/escalation-rules';
 import { api, errorMessage } from '@/lib/api';
@@ -217,7 +220,60 @@ export default function SystemPage() {
           </div>
         </CardContent>
       </Card>
+
+      <ClearTicketsCard />
     </>
+  );
+}
+
+const CLEAR_PHRASE = 'CLEAR ALL TICKETS';
+
+// The account owner can wipe every ticket for a fresh start (a backup is taken first, on the server).
+function ClearTicketsCard() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  if (!user?.is_owner) return null;
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle>Clear all tickets</CardTitle>
+        <CardDescription>Start again with no tickets. Only you, as the account owner, can see this.</CardDescription>
+        <CardAction>
+          <Button variant="destructive" onClick={() => setOpen(true)}>
+            <Trash2 />
+            Clear all tickets
+          </Button>
+        </CardAction>
+      </CardHeader>
+      {open && (
+        <DeleteForeverDialog
+          title="Clear all tickets"
+          confirmWord={CLEAR_PHRASE}
+          onClose={() => setOpen(false)}
+          onConfirm={async () => {
+            const r = await api.post<{ tickets: number; backup: string }>('/system/clear-tickets', { confirm: CLEAR_PHRASE });
+            toast.success(`${r.tickets} tickets cleared`, { description: `Backup saved first: ${r.backup}` });
+            qc.removeQueries({ queryKey: ['ticket'] });
+            qc.invalidateQueries();
+          }}
+        >
+          <p>Every ticket on the platform is removed, with:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>their conversations, internal notes, files and saved transcripts</li>
+            <li>visits, sign-offs, client ratings and admin ratings</li>
+            <li>ticket notifications, to-do items and ticket emails not yet sent</li>
+          </ul>
+          <p>
+            The dashboard, reports, performance figures and statements start from zero, and new tickets are numbered from #1. Replies to emails about old
+            tickets are no longer accepted.
+          </p>
+          <p className="text-muted-foreground">
+            A full backup is taken on the server first; if it fails, nothing is deleted. Companies, users, sites, technicians and chats stay.
+          </p>
+        </DeleteForeverDialog>
+      )}
+    </Card>
   );
 }
 
