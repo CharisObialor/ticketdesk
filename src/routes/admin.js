@@ -174,7 +174,8 @@ router.get(
   })
 );
 
-// Adds one site, or many at once ({ sites: [...] }, for example pasted from a spreadsheet).
+// Adds one site, or many at once ({ sites: [...] }, for example pasted from a spreadsheet). In a pasted list, a Site ID
+// already on the list takes the pasted location and details (blank cells leave what is there).
 router.post(
   '/companies/:id/sites',
   requireAdmin,
@@ -186,12 +187,22 @@ router.post(
     if (list.length > MAX_SITES_PER_ADD) throw new HttpError(400, `Add at most ${MAX_SITES_PER_ADD} sites at a time`);
     const ts = now();
     let added = 0;
+    const updated = [];
     const skipped = [];
     for (const item of list) {
       const f = siteFields(item || {});
-      if (await siteCodeTaken(company.id, f.code)) {
-        if (list.length === 1) throw new HttpError(409, `Site ID ${f.code} is already on the list`);
-        skipped.push(f.code);
+      const taken = await siteCodeTaken(company.id, f.code);
+      if (taken) {
+        if (!Array.isArray(req.body.sites)) throw new HttpError(409, `Site ID ${f.code} is already on the list`);
+        const existing = await db.one('SELECT * FROM sites WHERE id = ?', [taken.id]);
+        const location = f.location || existing.location;
+        const details = f.details || existing.details;
+        if (location === existing.location && details === existing.details) {
+          skipped.push(f.code);
+          continue;
+        }
+        await db.query('UPDATE sites SET location = ?, details = ?, updated_at = ? WHERE id = ?', [location, details, ts, existing.id]);
+        updated.push(f.code);
         continue;
       }
       await db.query('INSERT INTO sites (company_id, code, location, details, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [
@@ -205,7 +216,7 @@ router.post(
       ]);
       added++;
     }
-    res.status(201).json({ added, skipped });
+    res.status(201).json({ added, updated, skipped });
   })
 );
 

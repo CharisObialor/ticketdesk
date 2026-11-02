@@ -219,11 +219,11 @@ function PasteSitesDialog({ company, onClose }: { company: Company; onClose: () 
     if (!rows.length) return toast.error('Paste at least one site');
     setBusy(true);
     try {
-      const r = await api.post<{ added: number; skipped: string[] }>(`/companies/${company.id}/sites`, { sites: rows });
+      const r = await api.post<{ added: number; updated?: string[]; skipped: string[] }>(`/companies/${company.id}/sites`, { sites: rows });
       qc.invalidateQueries({ queryKey: ['sites'] });
-      toast.success(`${r.added} site${r.added === 1 ? '' : 's'} added`, {
-        description: r.skipped.length ? `Already on the list: ${r.skipped.slice(0, 8).join(', ')}${r.skipped.length > 8 ? ` and ${r.skipped.length - 8} more` : ''}` : undefined,
-      });
+      const updated = r.updated?.length ?? 0;
+      const parts = [`${r.added} added`, ...(updated ? [`${updated} updated`] : []), ...(r.skipped.length ? [`${r.skipped.length} already up to date`] : [])];
+      toast.success(`Sites saved: ${parts.join(', ')}`);
       onClose();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -239,8 +239,8 @@ function PasteSitesDialog({ company, onClose }: { company: Company; onClose: () 
           <DialogHeader>
             <DialogTitle>Paste a list of sites</DialogTitle>
             <DialogDescription>
-              One site per line: Site ID, Location, Details. You can also copy the columns straight from a spreadsheet. Site IDs already on the list are
-              skipped.
+              One site per line: Site ID, Location, Details. You can also copy the columns straight from a spreadsheet. A Site ID already on the list
+              takes the pasted location and details; empty cells leave what is there.
             </DialogDescription>
           </DialogHeader>
           <Textarea
