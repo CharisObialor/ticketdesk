@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -6,6 +6,8 @@ import {
   CheckCheck,
   Eye,
   ExternalLink,
+  Link2,
+  MessageSquare,
   Loader2,
   Lock,
   LogOut,
@@ -18,6 +20,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -36,38 +39,59 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
+import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
+import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
 import { StatusBadge } from '@/components/ticket-badges';
 import { useRealtime, type GroupData } from '@/hooks/use-realtime';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import type { ChatItem, ChatMessage, Company, Role } from '@/lib/types';
+import type { ChatItem, ChatMessage, Company, ConversationImage, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
+import { basename } from '@/lib/url-key';
+import { NewTeamChatDialog, TeamPane } from '@/components/team-chat';
+import { ConversationPicture } from '@/components/conversation-image';
+import { apiHref } from '@/lib/api';
+import { useInbox } from '@/hooks/use-inbox';
 
-type Filter = 'all' | 'group' | 'ticket';
+type Filter = 'all' | 'group' | 'ticket' | 'team';
 
-export function useInbox() {
-  return useQuery({
-    queryKey: ['chats'],
-    queryFn: () => api.get<{ items: ChatItem[]; unread: number }>('/chats'),
-    refetchInterval: 60_000,
-  });
+export { useInbox };
+
+// The picture the inbox has for a conversation (company logo), for its header.
+function useInboxImage() {
+  const inbox = useInbox();
+  return (type: ChatItem['type'], id: number) => inbox.data?.items.find((i) => i.type === type && i.id === id)?.image ?? null;
 }
 
 export default function MessagesPage() {
   const { type, id } = useParams();
-  const selected = type === 'group' || type === 'ticket' ? { type, id: Number(id) } : null;
+  const { isAdmin } = useSession();
+  const selected = type === 'group' || type === 'ticket' || (type === 'team' && isAdmin) ? { type, id: Number(id) } : null;
   const [creating, setCreating] = useState(false);
+  const [creatingTeam, setCreatingTeam] = useState(false);
 
   return (
     <Card className="h-[calc(100svh-9.5rem)] min-h-[480px] gap-0 overflow-hidden py-0 md:grid md:grid-cols-[340px_minmax(0,1fr)]">
       <div className={cn('flex min-h-0 flex-col border-r', selected ? 'hidden md:flex' : 'flex h-full')}>
-        <ConversationList selected={selected} onNewGroup={() => setCreating(true)} />
+        <ConversationList selected={selected} onNewGroup={() => setCreating(true)} onNewTeam={isAdmin ? () => setCreatingTeam(true) : undefined} />
       </div>
       <div className={cn('min-h-0 flex-col', selected ? 'flex h-full' : 'hidden md:flex')}>
         {selected?.type === 'group' ? (
           <GroupPane key={`g${selected.id}`} groupId={selected.id} />
+        ) : selected?.type === 'team' ? (
+          <TeamPane key={`a${selected.id}`} chatId={selected.id} />
         ) : selected?.type === 'ticket' ? (
           <TicketPane key={`t${selected.id}`} ticketId={selected.id} />
         ) : (
@@ -87,6 +111,7 @@ export default function MessagesPage() {
         )}
       </div>
       {creating && <NewGroupDialog onClose={() => setCreating(false)} />}
+      {creatingTeam && <NewTeamChatDialog onClose={() => setCreatingTeam(false)} />}
     </Card>
   );
 }
@@ -115,7 +140,7 @@ function Highlight({ text, term }: { text: string; term: string }) {
   );
 }
 
-function ConversationList({ selected, onNewGroup }: { selected: { type: string; id: number } | null; onNewGroup: () => void }) {
+function ConversationList({ selected, onNewGroup, onNewTeam }: { selected: { type: string; id: number } | null; onNewGroup: () => void; onNewTeam?: () => void }) {
   const inbox = useInbox();
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -142,23 +167,43 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
   return (
     <>
       <div className="space-y-3 border-b p-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold">Messages</h1>
-          <Button size="sm" onClick={onNewGroup}>
-            <Plus />
-            New group
-          </Button>
-        </div>
+        {onNewTeam ? (
+          // Admins have two buttons: they get their own row so neither crowds the title or runs past the panel edge.
+          <>
+            <h1 className="type-h3">Messages</h1>
+            <div className="grid grid-cols-2 gap-2">
+              <Button size="sm" variant="outline" onClick={onNewTeam} title="Chat privately with other admins">
+                <ShieldCheck />
+                Admin chat
+              </Button>
+              <Button size="sm" onClick={onNewGroup}>
+                <Plus />
+                New group
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="type-h3">Messages</h1>
+            <Button size="sm" onClick={onNewGroup}>
+              <Plus />
+              New group
+            </Button>
+          </div>
+        )}
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder="Search conversations" className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
           <TabsList className="w-full">
-            {(['all', 'group', 'ticket'] as Filter[]).map((f) => (
-              <TabsTrigger key={f} value={f}>
-                {f === 'all' ? 'All' : f === 'group' ? 'Groups' : 'Tickets'}
-                {unread(f) > 0 && <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{unread(f)}</span>}
+            {(onNewTeam ? (['all', 'group', 'ticket', 'team'] as Filter[]) : (['all', 'group', 'ticket'] as Filter[])).map((f) => (
+              // Four tabs with unread counts share a narrow panel: tighter spacing so none is cut off.
+              <TabsTrigger key={f} value={f} className="min-w-0 flex-auto gap-1 px-1 text-[13px]">
+                {f === 'all' ? 'All' : f === 'group' ? 'Groups' : f === 'ticket' ? 'Tickets' : 'Admins'}
+                {unread(f) > 0 && (
+                  <span className="rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground tabular-nums">{unread(f) > 99 ? '99+' : unread(f)}</span>
+                )}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -174,8 +219,18 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
         ) : items.length === 0 && !hits.length ? (
           <EmptyState
             icon={term ? Search : filter === 'ticket' ? TicketIcon : Users}
-            title={term ? (searching ? 'Searching...' : 'No matches') : filter === 'group' ? 'No group conversations yet' : 'No conversations yet'}
-            description={term ? undefined : filter === 'ticket' ? 'Ticket conversations appear here.' : 'Start a group to chat with your colleagues and our support team.'}
+            title={
+              term ? (searching ? 'Searching...' : 'No matches') : filter === 'group' ? 'No group conversations yet' : filter === 'team' ? 'No admin chats yet' : 'No conversations yet'
+            }
+            description={
+              term
+                ? undefined
+                : filter === 'ticket'
+                  ? 'Ticket conversations appear here.'
+                  : filter === 'team'
+                    ? 'Use Admin chat to message other admins privately.'
+                    : 'Start a group to chat with your colleagues and our support team.'
+            }
           />
         ) : (
           <>
@@ -216,16 +271,54 @@ function ConversationList({ selected, onNewGroup }: { selected: { type: string; 
 }
 
 function ConversationRow({ item: i, active }: { item: ChatItem; active: boolean }) {
-  const Icon = i.type === 'group' ? Users : TicketIcon;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <ConversationLink item={i} active={active} />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem asChild>
+          <Link to={`/messages/${i.type}/${i.id}`}>
+            <MessageSquare />
+            Open conversation
+          </Link>
+        </ContextMenuItem>
+        {i.type === 'ticket' && (
+          <ContextMenuItem asChild>
+            <Link to={`/tickets/${i.id}`}>
+              <TicketIcon />
+              Open ticket page
+            </Link>
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onClick={() => window.open(`${basename ?? ''}/messages/${i.type}/${i.id}`, '_blank', 'noopener')}>
+          <ExternalLink />
+          Open in new tab
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onClick={() =>
+            navigator.clipboard.writeText(`${window.location.origin}/messages/${i.type}/${i.id}`).then(
+              () => toast.success('Link copied'),
+              () => toast.error('Could not copy')
+            )
+          }
+        >
+          <Link2 />
+          Copy link
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+// The right-click menu passes its event handlers through these props onto the link.
+function ConversationLink({ item: i, active, ...rest }: { item: ChatItem; active: boolean } & HTMLAttributes<HTMLAnchorElement>) {
+  const Icon = i.type === 'group' ? Users : i.type === 'team' ? ShieldCheck : TicketIcon;
   const preview = i.last_body ? (i.last_kind === 'system' || !i.last_user ? i.last_body : `${i.last_user}: ${i.last_body}`) : 'No messages yet';
   return (
-    <Link
-      to={`/messages/${i.type}/${i.id}`}
-      className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}
-    >
-      <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-full', i.type === 'group' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>
-        <Icon className="size-4" />
-      </div>
+    <Link {...rest} to={`/messages/${i.type}/${i.id}`} className={cn('flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50', active && 'bg-muted')}>
+      <ConversationPicture image={i.image} name={i.title} icon={Icon} muted={i.type === 'ticket'} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className={cn('truncate text-sm', i.unread ? 'font-semibold' : 'font-medium')}>{i.title}</span>
@@ -248,7 +341,19 @@ function ConversationRow({ item: i, active }: { item: ChatItem; active: boolean 
   );
 }
 
-function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Users; title: string; subtitle: string; actions?: ReactNode }) {
+function PaneHeader({
+  icon: Icon,
+  title,
+  subtitle,
+  actions,
+  image,
+}: {
+  icon: typeof Users;
+  title: string;
+  subtitle: string;
+  actions?: ReactNode;
+  image?: ConversationImage | null;
+}) {
   return (
     <div className="flex items-center gap-3 border-b px-4 py-3">
       <Button variant="ghost" size="icon-sm" className="md:hidden" asChild>
@@ -256,9 +361,7 @@ function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Use
           <ArrowLeft />
         </Link>
       </Button>
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Icon className="size-4" />
-      </div>
+      <ConversationPicture image={image} name={title} icon={Icon} className="size-9" />
       <div className="min-w-0 flex-1">
         <div className="truncate font-semibold">{title}</div>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
@@ -271,11 +374,11 @@ function PaneHeader({ icon: Icon, title, subtitle, actions }: { icon: typeof Use
 // ---- Group conversation ----
 
 function GroupPane({ groupId }: { groupId: number }) {
+  const inboxImage = useInboxImage();
   const qc = useQueryClient();
   const { user } = useSession();
   const { groupTypingFor } = useRealtime();
   const [showMembers, setShowMembers] = useState(false);
-  const end = useRef<HTMLDivElement>(null);
   const query = useQuery({
     queryKey: ['group', groupId],
     queryFn: () => api.get<GroupData>(`/chats/groups/${groupId}`),
@@ -288,12 +391,11 @@ function GroupPane({ groupId }: { groupId: number }) {
   // Keep the conversation marked as read while it is open.
   useEffect(() => {
     if (!isMember || !messages.length) return;
-    api.post(`/chats/groups/${groupId}/read`).then(() => qc.invalidateQueries({ queryKey: ['chats'] }), () => {});
+    api.post(`/chats/groups/${groupId}/read`).then(
+      () => qc.invalidateQueries({ queryKey: ['chats'] }),
+      () => {}
+    );
   }, [groupId, isMember, messages.length, qc]);
-
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: 'nearest' });
-  }, [messages.length, typing.length]);
 
   if (query.isPending) return <PaneSkeleton />;
   if (query.isError) {
@@ -314,6 +416,7 @@ function GroupPane({ groupId }: { groupId: number }) {
     <>
       <PaneHeader
         icon={Users}
+        image={inboxImage('group', group.id)}
         title={group.name}
         subtitle={`${group.company_name} · ${members.map((m) => (m.id === user?.id ? 'You' : m.name.split(' ')[0])).join(', ')}`}
         actions={
@@ -323,18 +426,31 @@ function GroupPane({ groupId }: { groupId: number }) {
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
-        {messages.map((m, i) => (
-          <ChatBubble key={m.id} message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} />
-        ))}
-        {typing.length > 0 && (
-          <div className="flex items-center gap-2 pt-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" />
-            {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
-          </div>
-        )}
-        <div ref={end} />
-      </div>
+      {/* shadcn chat layout: opens at the newest message, follows new ones while you are at the bottom. */}
+      <MessageScrollerProvider key={groupId} autoScroll defaultScrollPosition="end">
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport>
+            <MessageScrollerContent className="gap-1 px-4 py-4">
+              {messages.map((m, i) => (
+                <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
+                  <ChatBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} />
+                </MessageScrollerItem>
+              ))}
+              {typing.length > 0 && (
+                <Marker className="pt-2 text-xs">
+                  <MarkerIcon>
+                    <Loader2 className="size-3 animate-spin" />
+                  </MarkerIcon>
+                  <MarkerContent>
+                    {typing.join(', ')} {typing.length === 1 ? 'is' : 'are'} typing
+                  </MarkerContent>
+                </Marker>
+              )}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+        </MessageScroller>
+      </MessageScrollerProvider>
       {!isMember && (
         <div className="px-4 pt-3">
           <Alert>
@@ -361,10 +477,7 @@ function PaneSkeleton() {
 }
 
 const sameBlock = (a: ChatMessage | undefined, b: ChatMessage) =>
-  !!a &&
-  a.kind === 'message' &&
-  a.user_id === b.user_id &&
-  (parseTs(b.created_at)?.getTime() ?? 0) - (parseTs(a.created_at)?.getTime() ?? 0) < 5 * 60_000;
+  !!a && a.kind === 'message' && a.user_id === b.user_id && (parseTs(b.created_at)?.getTime() ?? 0) - (parseTs(a.created_at)?.getTime() ?? 0) < 5 * 60_000;
 
 function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; prev?: ChatMessage; own: boolean; seenBy?: string[] }) {
   const qc = useQueryClient();
@@ -381,21 +494,21 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
   });
   if (m.kind === 'system') {
     return (
-      <div className="flex justify-center py-2">
-        <span className="rounded-full bg-muted px-3 py-1 text-center text-xs text-muted-foreground" title={formatDateTime(m.created_at)}>
-          {m.body}
-        </span>
-      </div>
+      <Marker variant="separator" className="py-2 text-xs" title={formatDateTime(m.created_at)}>
+        <MarkerContent>{m.body}</MarkerContent>
+      </Marker>
     );
   }
   const grouped = sameBlock(prev, m);
   const staff = isStaffRole(m.user_role);
   return (
-    <div className={cn('flex gap-2', own && 'flex-row-reverse', !grouped && 'pt-3')}>
-      <div className="w-8 shrink-0">{!grouped && !own && <UserAvatar name={m.user_name} />}</div>
-      <div className={cn('flex max-w-[75%] min-w-0 flex-col gap-1', own && 'items-end')}>
+    <UiMessage align={own ? 'end' : 'start'} className={cn(!grouped && 'pt-3')}>
+      <MessageAvatar className={cn('self-start', (grouped || own) && 'invisible')}>
+        {!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} />}
+      </MessageAvatar>
+      <MessageContent className="max-w-[75%] gap-1">
         {!grouped && (
-          <div className={cn('flex items-center gap-2 text-xs', own && 'flex-row-reverse')}>
+          <MessageHeader className={cn('gap-2 px-0 font-normal text-foreground', own && 'flex-row-reverse')}>
             <span className="font-medium">{own ? 'You' : (m.user_name ?? 'Deleted user')}</span>
             {staff && !own && (
               <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
@@ -405,22 +518,17 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
             <span className="text-muted-foreground" title={formatDateTime(m.created_at)}>
               {formatTime(m.created_at)}
             </span>
-          </div>
+          </MessageHeader>
         )}
         {editing ? (
           <div className="w-72 max-w-full">
             <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
           </div>
-        ) : (
+        ) : m.body === '(attachment)' && m.attachments.length > 0 ? null : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            <div
-              className={cn(
-                'rounded-2xl px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap',
-                own ? 'rounded-tr-sm bg-primary text-primary-foreground' : 'rounded-tl-sm bg-muted'
-              )}
-            >
-              {m.body}
-            </div>
+            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
+              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+            </Bubble>
             {own && (
               <Button
                 variant="ghost"
@@ -435,19 +543,19 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
           </div>
         )}
         {m.edited_at && !editing && (
-          <span className="text-[10px] text-muted-foreground italic" title={`Edited ${formatDateTime(m.edited_at)}`}>
+          <span className={cn('text-[10px] text-muted-foreground italic', own && 'self-end')} title={`Edited ${formatDateTime(m.edited_at)}`}>
             edited
           </span>
         )}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base="/api/chats/files" />}
+        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/chats/files')} align={own ? 'end' : 'start'} />}
         {seenBy && seenBy.length > 0 && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
             Seen by {seenBy.join(', ')}
-          </span>
+          </MessageFooter>
         )}
-      </div>
-    </div>
+      </MessageContent>
+    </UiMessage>
   );
 }
 
@@ -610,7 +718,7 @@ function MembersSheet({ data, onClose }: { data: GroupData; onClose: () => void 
         <ul className="min-h-0 flex-1 overflow-y-auto px-2">
           {members.map((m) => (
             <li key={m.id} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50">
-              <UserAvatar name={m.name} />
+              <UserAvatar name={m.name} userId={m.id} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">
                   {m.name}
@@ -659,7 +767,17 @@ function useCandidates(companyId: number | null, enabled: boolean) {
   });
 }
 
-function PeoplePicker({ people, selected, onToggle, exclude = [] }: { people: Candidate[]; selected: number[]; onToggle: (id: number) => void; exclude?: number[] }) {
+function PeoplePicker({
+  people,
+  selected,
+  onToggle,
+  exclude = [],
+}: {
+  people: Candidate[];
+  selected: number[];
+  onToggle: (id: number) => void;
+  exclude?: number[];
+}) {
   const [search, setSearch] = useState('');
   const term = search.trim().toLowerCase();
   const visible = people.filter((p) => !exclude.includes(p.id) && (!term || p.name.toLowerCase().includes(term) || p.email.toLowerCase().includes(term)));
@@ -772,7 +890,11 @@ function NewGroupDialog({ onClose }: { onClose: () => void }) {
           {(!isStaff || companyId) && (
             <div className="grid gap-2">
               <Label>Members</Label>
-              {candidates.isPending ? <Skeleton className="h-40" /> : <PeoplePicker people={people} selected={selected} onToggle={(id) => setSelected((s) => toggle(s, id))} />}
+              {candidates.isPending ? (
+                <Skeleton className="h-40" />
+              ) : (
+                <PeoplePicker people={people} selected={selected} onToggle={(id) => setSelected((s) => toggle(s, id))} />
+              )}
               <p className={cn('text-xs', includesAdmin ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-400')}>
                 {selected.length} selected{includesAdmin ? '' : ' · include at least one admin'}
               </p>
@@ -839,6 +961,7 @@ function AddMembersDialog({ data, onClose, onAdded }: { data: GroupData; onClose
 // ---- Ticket conversation (same thread as the ticket page) ----
 
 function TicketPane({ ticketId }: { ticketId: number }) {
+  const inboxImage = useInboxImage();
   const { isStaff } = useSession();
   const qc = useQueryClient();
   const query = useQuery({
@@ -850,7 +973,10 @@ function TicketPane({ ticketId }: { ticketId: number }) {
 
   useEffect(() => {
     if (!count) return;
-    api.post(`/chats/tickets/${ticketId}/read`).then(() => qc.invalidateQueries({ queryKey: ['chats'] }), () => {});
+    api.post(`/chats/tickets/${ticketId}/read`).then(
+      () => qc.invalidateQueries({ queryKey: ['chats'] }),
+      () => {}
+    );
   }, [ticketId, count, qc]);
 
   if (query.isPending) return <PaneSkeleton />;
@@ -866,6 +992,7 @@ function TicketPane({ ticketId }: { ticketId: number }) {
     <>
       <PaneHeader
         icon={TicketIcon}
+        image={inboxImage('ticket', t.id)}
         title={t.subject}
         subtitle={`#${t.id} · ${t.company_name}`}
         actions={
@@ -880,7 +1007,7 @@ function TicketPane({ ticketId }: { ticketId: number }) {
           </>
         }
       />
-      <Thread ticket={t} messages={messages} isStaff={isStaff} reads={query.data.reads} className="max-h-none min-h-0 flex-1" />
+      <Thread ticket={t} messages={messages} isStaff={isStaff} reads={query.data.reads} fill />
       <Separator />
       {t.status === 'closed' && !isStaff ? (
         <div className="p-4">

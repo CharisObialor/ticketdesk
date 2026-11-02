@@ -3,8 +3,9 @@ const router = require('express').Router();
 const db = require('../db');
 const notify = require('../notify');
 const realtime = require('../realtime');
+const privacy = require('../privacy');
 const ticketsSvc = require('../services/tickets');
-const { upload, cleanup, uploadsDir } = require('../uploads');
+const { upload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
 
@@ -116,48 +117,56 @@ const groupChanged = async (groupId, extraUserIds = []) =>
 
 // ---- Inbox: group chats and ticket conversations in one list ----
 
+// The client company's logo as the conversation's picture (none when the company has no logo).
+const companyLogo = (row) => (row.company_logo ? { kind: 'logo', url: `/api/companies/${row.company_id}/logo?v=${row.company_logo}` } : null);
+
 router.get(
   '/',
   wrap(async (req, res) => {
     const u = req.user;
     const staff = isStaff(u);
+    // Clients see the team, not the engineer, as the author of the latest message.
+    const author = staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' THEN '${privacy.TEAM}' ELSE lu.name END`;
 
     const groups = await db.query(
-      `SELECT g.id, g.name, g.company_id, c.name AS company_name, g.created_by, g.last_message_at,
+      `SELECT g.id, g.name, g.company_id, c.name AS company_name, c.logo AS company_logo, g.created_by, g.last_message_at,
         CASE WHEN m.user_id IS NULL THEN 0 ELSE 1 END AS is_member,
         (SELECT COUNT(*) FROM chat_members x WHERE x.group_id = g.id) AS member_count,
         (SELECT cm.body FROM chat_messages cm WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_body,
         (SELECT cm.kind FROM chat_messages cm WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_kind,
-        (SELECT lu.name FROM chat_messages cm LEFT JOIN users lu ON lu.id = cm.user_id WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_user,
+        (SELECT ${author} FROM chat_messages cm LEFT JOIN users lu ON lu.id = cm.user_id WHERE cm.group_id = g.id ORDER BY cm.id DESC LIMIT 1) AS last_user,
         CASE WHEN m.user_id IS NULL THEN 0 ELSE (
           SELECT COUNT(*) FROM chat_messages cm WHERE cm.group_id = g.id AND cm.kind = 'message'
             AND (cm.user_id IS NULL OR cm.user_id <> ?) AND cm.id > m.last_read_id
         ) END AS unread
-       FROM chat_groups g
+       FROM (${
+         isAdmin(u)
+           ? 'SELECT * FROM chat_groups ORDER BY last_message_at DESC LIMIT ?'
+           : 'SELECT g.* FROM chat_groups g JOIN chat_members mm ON mm.group_id = g.id AND mm.user_id = ? ORDER BY g.last_message_at DESC LIMIT ?'
+       }) g
        JOIN companies c ON c.id = g.company_id
        LEFT JOIN chat_members m ON m.group_id = g.id AND m.user_id = ?
-       ${isAdmin(u) ? '' : 'WHERE m.user_id IS NOT NULL'}
-       ORDER BY g.last_message_at DESC LIMIT ?`,
-      [u.id, u.id, INBOX_LIMIT]
+       ORDER BY g.last_message_at DESC`,
+      // The newest conversations are picked first, so previews and unread counts are only worked out for those.
+      [u.id, ...(isAdmin(u) ? [] : [u.id]), INBOX_LIMIT, u.id]
     );
 
     // Unread counts only apply to tickets this user is following: ones they have opened, or that are theirs.
     const internal = staff ? '' : 'AND tm.is_internal = 0';
     const tickets = await db.query(
-      `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, t.last_activity_at,
+      `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, c.logo AS company_logo, t.last_activity_at,
         (SELECT tm.body FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_body,
         (SELECT tm.kind FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_kind,
-        (SELECT lu.name FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
+        (SELECT ${staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' OR tm.kind = 'work_update' THEN '${privacy.TEAM}' ELSE lu.name END`} FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
         CASE WHEN r.ticket_id IS NULL AND COALESCE(${staff ? 't.assigned_to' : 't.created_by'}, 0) <> ? THEN 0 ELSE (
           SELECT COUNT(*) FROM messages tm WHERE tm.ticket_id = t.id AND tm.kind = 'message' ${internal}
             AND (tm.user_id IS NULL OR tm.user_id <> ?) AND tm.id > COALESCE(r.last_read_id, 0)
         ) END AS unread
-       FROM tickets t
+       FROM (SELECT * FROM tickets ${staff ? '' : 'WHERE company_id = ?'} ORDER BY last_activity_at DESC LIMIT ?) t
        JOIN companies c ON c.id = t.company_id
        LEFT JOIN ticket_reads r ON r.ticket_id = t.id AND r.user_id = ?
-       ${staff ? '' : 'WHERE t.company_id = ?'}
-       ORDER BY t.last_activity_at DESC LIMIT ?`,
-      [u.id, u.id, u.id, ...(staff ? [] : [u.company_id]), INBOX_LIMIT]
+       ORDER BY t.last_activity_at DESC`,
+      [u.id, u.id, ...(staff ? [] : [u.company_id]), INBOX_LIMIT, u.id]
     );
 
     const items = [
@@ -165,6 +174,7 @@ router.get(
         type: 'group',
         id: g.id,
         title: g.name,
+        image: companyLogo(g),
         subtitle: `${g.company_name} · ${g.member_count} members`,
         company_name: g.company_name,
         last_at: g.last_message_at,
@@ -178,6 +188,7 @@ router.get(
         type: 'ticket',
         id: t.id,
         title: t.subject,
+        image: companyLogo(t),
         subtitle: `#${t.id} · ${t.company_name}`,
         company_name: t.company_name,
         status: t.status,
@@ -189,6 +200,7 @@ router.get(
         unread: Number(t.unread) || 0,
         is_member: true,
       })),
+      ...(await require('./team').inboxItems(u)),
     ].sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
 
     res.json({ items, unread: items.reduce((s, i) => s + i.unread, 0) });
@@ -205,7 +217,7 @@ router.get(
     if (q.length < 2) return res.json({ results: [] });
     const like = `%${q}%`;
     const groupRows = await db.query(
-      `SELECT cm.id, cm.group_id, cm.body, cm.created_at, u.name AS user_name, g.name AS title, c.name AS company_name
+      `SELECT cm.id, cm.group_id, cm.body, cm.created_at, u.name AS user_name, u.role AS user_role, g.name AS title, c.name AS company_name
        FROM chat_messages cm
        JOIN chat_groups g ON g.id = cm.group_id
        JOIN companies c ON c.id = g.company_id
@@ -216,7 +228,7 @@ router.get(
       [...(isAdmin(u) ? [] : [u.id]), like]
     );
     const ticketRows = await db.query(
-      `SELECT m.id, m.ticket_id, m.body, m.created_at, m.is_internal, u.name AS user_name, t.subject AS title, c.name AS company_name
+      `SELECT m.id, m.ticket_id, m.body, m.created_at, m.is_internal, u.name AS user_name, u.role AS user_role, t.subject AS title, c.name AS company_name
        FROM messages m
        JOIN tickets t ON t.id = m.ticket_id
        JOIN companies c ON c.id = t.company_id
@@ -232,8 +244,8 @@ router.get(
       return (start > 0 ? '...' : '') + body.slice(start, start + 160).replace(/\s+/g, ' ') + (body.length > start + 160 ? '...' : '');
     };
     const results = [
-      ...groupRows.map((r) => ({ type: 'group', id: r.group_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, snippet: snippet(r.body), created_at: r.created_at })),
-      ...ticketRows.map((r) => ({ type: 'ticket', id: r.ticket_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, snippet: snippet(r.body), created_at: r.created_at, internal: !!Number(r.is_internal) })),
+      ...groupRows.map((r) => ({ type: 'group', id: r.group_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, user_role: r.user_role, snippet: snippet(r.body), created_at: r.created_at })),
+      ...ticketRows.map((r) => ({ type: 'ticket', id: r.ticket_id, message_id: r.id, title: r.title, company_name: r.company_name, user_name: r.user_name, user_role: r.user_role, snippet: snippet(r.body), created_at: r.created_at, internal: !!Number(r.is_internal) })),
     ].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
     res.json({ results: results.slice(0, 30) });
   })
@@ -426,7 +438,7 @@ router.get(
     const a = await db.one('SELECT * FROM chat_attachments WHERE id = ?', [Number(req.params.id)]);
     const member = a && (await db.one('SELECT user_id FROM chat_members WHERE group_id = ? AND user_id = ?', [a.group_id, req.user.id]));
     if (!a || (!member && !isAdmin(req.user))) throw new HttpError(404, 'File not found');
-    const inline = /^(image\/(png|jpe?g|gif|webp)|application\/pdf)$/.test(a.mime) && req.query.download !== '1';
+    const inline = INLINE.test(a.mime) && req.query.download !== '1';
     res.attachment(a.original_name);
     if (inline) res.set('Content-Disposition', res.get('Content-Disposition').replace(/^attachment/, 'inline'));
     res.type(inline ? a.mime : 'application/octet-stream');

@@ -8,13 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { DateTimePicker } from '@/components/date-time-picker';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { ROLE_LABELS, parseTs } from '@/lib/format';
+import { ROLE_LABELS, parseTs, VISIT_DURATIONS, visitDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { ClientVisitActions } from '@/components/client-visit';
 import type { StaffMember, Ticket, Visit, VisitStatus } from '@/lib/types';
 
 const visitFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -91,7 +93,7 @@ export function ScheduleVisitDialog({ ticket, visit, onClose }: { ticket: Pick<T
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="visit-when">Date and time *</Label>
-              <Input id="visit-when" type="datetime-local" required value={when} onChange={(e) => setWhen(e.target.value)} />
+              <DateTimePicker id="visit-when" value={when} onChange={setWhen} fromDate={visit ? undefined : new Date(new Date().setHours(0, 0, 0, 0))} />
             </div>
             <div className="grid gap-2">
               <Label>Expected duration</Label>
@@ -100,11 +102,14 @@ export function ScheduleVisitDialog({ ticket, visit, onClose }: { ticket: Pick<T
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {[30, 60, 90, 120, 180, 240, 480].map((m) => (
-                    <SelectItem key={m} value={String(m)}>
-                      {m < 60 ? `${m} minutes` : `${m / 60} hour${m === 60 ? '' : 's'}`}
-                    </SelectItem>
-                  ))}
+                  {[...new Set([...VISIT_DURATIONS, Number(duration)])]
+                    .sort((a, b) => a - b)
+                    .map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {visitDuration(m)}
+                        {m === 480 ? ' (full working day)' : ''}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -157,7 +162,7 @@ export function VisitsCard({ ticket, visits }: { ticket: Ticket; visits: Visit[]
   return (
     <Card className="gap-4">
       <CardHeader>
-        <CardTitle className="text-sm">Site visits</CardTitle>
+        <CardTitle className="type-h5">Site visits</CardTitle>
         {isStaff && ticket.status !== 'closed' && (
           <CardAction>
             <Button variant="ghost" size="xs" onClick={() => setScheduling(true)}>
@@ -198,8 +203,9 @@ export function VisitsCard({ ticket, visits }: { ticket: Ticket; visits: Visit[]
                 {body}
               </Link>
             ) : (
-              <div key={v.id} className="rounded-md border p-2.5">
+              <div key={v.id} className="space-y-2 rounded-md border p-2.5">
                 {body}
+                <ClientVisitActions visit={{ ...v, subject: ticket.subject }} />
               </div>
             );
           })

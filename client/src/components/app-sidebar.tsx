@@ -9,7 +9,16 @@ import {
   CircleCheck,
   Inbox,
   LayoutDashboard,
+  ListTodo,
   LogOut,
+  ALargeSmall,
+  FileChartColumn,
+  HardHat,
+  House,
+  MapPin,
+  ChartColumn,
+  Compass,
+  Mail,
   MessageSquareText,
   MessagesSquare,
   Monitor,
@@ -55,12 +64,18 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { BrandLockup, UserAvatar } from '@/components/common';
 import { useSession } from '@/hooks/use-session';
-import { useTheme, type Theme } from '@/hooks/use-theme';
+import { TEXT_SIZES, useTheme, type TextSize, type Theme } from '@/hooks/use-theme';
 import { api } from '@/lib/api';
 import { ROLE_LABELS } from '@/lib/format';
 import type { Counts } from '@/lib/types';
-import { useInbox } from '@/pages/messages';
+import { useInbox } from '@/hooks/use-inbox';
 import { useInstallPrompt } from '@/hooks/use-install';
+import { useActions } from '@/hooks/use-actions';
+import { useMailboxes } from '@/hooks/use-mailboxes';
+import { startTour } from '@/lib/tour';
+
+// Red bubbles for things waiting on you: unread messages, unread mail and actions.
+const UNREAD_BADGE = 'bg-red-600 text-white peer-hover/menu-button:text-white peer-data-[active=true]/menu-button:text-white';
 
 interface NavItem {
   label: string;
@@ -71,15 +86,22 @@ interface NavItem {
 }
 
 export function AppSidebar() {
-  const { user, isStaff, isAdmin, signOut } = useSession();
-  const { theme, setTheme } = useTheme();
+  const { user, app, isStaff, isAdmin, signOut } = useSession();
+  const { theme, setTheme, textSize, setTextSize } = useTheme();
   const { isMobile, setOpenMobile } = useSidebar();
   const { pathname } = useLocation();
   const [params] = useSearchParams();
   const counts = useQuery({ queryKey: ['counts'], queryFn: () => api.get<Counts>('/tickets/counts'), refetchInterval: 60_000 });
   const inbox = useInbox();
   const { canInstall, install } = useInstallPrompt();
+  const actionsQuery = useActions(isAdmin);
+  // The badge counts what needs doing soon (urgent and high); the page lists everything.
+  const urgentActions = actionsQuery.data?.counts.urgent ?? 0;
+  const actionCount = urgentActions + (actionsQuery.data?.counts.high ?? 0);
   const unreadMessages = inbox.data?.unread ?? 0;
+  // Unread bubble on Mail: the admin's own inbox (shared mailboxes show their counts on the Mail page).
+  const mailboxes = useMailboxes(isAdmin && !!app?.mailbox);
+  const unreadMail = mailboxes.data?.mailboxes.find((m) => m.own)?.unread ?? 0;
 
   if (!user) return null;
 
@@ -97,13 +119,21 @@ export function AppSidebar() {
         { label: 'Resolved', icon: CircleCheck, to: '/tickets', view: 'resolved' },
       ];
 
+  const clientNav: NavItem[] = [
+    { label: 'Home', icon: House, to: '/home' },
+    { label: 'Sites', icon: MapPin, to: '/sites' },
+    { label: 'Performance', icon: ChartColumn, to: '/performance' },
+  ];
+
   const workNav: NavItem[] = [
     { label: 'Site visits', icon: CalendarClock, to: '/visits' },
     { label: 'Saved replies', icon: MessageSquareText, to: '/saved-replies' },
+    { label: 'Technicians', icon: HardHat, to: '/technicians' },
   ];
 
   const adminNav: NavItem[] = [
     { label: 'Companies', icon: Building2, to: '/companies' },
+    ...(isAdmin ? [{ label: 'Reports', icon: FileChartColumn, to: '/reports' }] : []),
     { label: 'Users', icon: Users, to: '/users' },
     { label: 'Transcripts', icon: Archive, to: '/transcripts' },
     ...(isAdmin ? [{ label: 'System', icon: Server, to: '/system' }] : []),
@@ -118,7 +148,7 @@ export function AppSidebar() {
     items.map((item) => (
       <SidebarMenuItem key={item.label}>
         <SidebarMenuButton asChild isActive={isActive(item)} tooltip={item.label}>
-          <Link to={href(item)} onClick={close}>
+          <Link to={href(item)} onClick={close} data-tour={item.view ? (item.view === 'open' ? 'nav-tickets' : undefined) : `nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}>
             <item.icon />
             <span>{item.label}</span>
           </Link>
@@ -128,7 +158,7 @@ export function AppSidebar() {
     ));
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" data-tour="sidebar">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -147,25 +177,49 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild tooltip="New ticket" className="bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground">
-                  <Link to="/tickets/new" onClick={close}>
+                  <Link to="/tickets/new" onClick={close} data-tour="nav-new">
                     <Plus />
                     <span>New ticket</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={pathname.startsWith('/actions')} tooltip="Actions">
+                    <Link to="/actions" onClick={close} data-tour="nav-actions">
+                      <ListTodo />
+                      <span>Actions</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  {actionCount > 0 && (
+                    <SidebarMenuBadge className={UNREAD_BADGE}>{actionCount > 99 ? '99+' : actionCount}</SidebarMenuBadge>
+                  )}
+                </SidebarMenuItem>
+              )}
+              {isAdmin && app?.mailbox && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={pathname.startsWith('/mail')} tooltip="Mail">
+                    <Link to="/mail" onClick={close} data-tour="nav-mail">
+                      <Mail />
+                      <span>Mail</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  {unreadMail > 0 && <SidebarMenuBadge className={UNREAD_BADGE}>{unreadMail > 99 ? '99+' : unreadMail}</SidebarMenuBadge>}
+                </SidebarMenuItem>
+              )}
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={pathname.startsWith('/messages')} tooltip="Messages">
-                  <Link to="/messages" onClick={close}>
+                  <Link to="/messages" onClick={close} data-tour="nav-messages">
                     <MessagesSquare />
                     <span>Messages</span>
                   </Link>
                 </SidebarMenuButton>
-                {unreadMessages > 0 && <SidebarMenuBadge className="bg-primary text-primary-foreground">{unreadMessages > 99 ? '99+' : unreadMessages}</SidebarMenuBadge>}
+                {unreadMessages > 0 && <SidebarMenuBadge className={UNREAD_BADGE}>{unreadMessages > 99 ? '99+' : unreadMessages}</SidebarMenuBadge>}
               </SidebarMenuItem>
               {isStaff && (
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={pathname === '/dashboard'} tooltip="Dashboard">
-                    <Link to="/dashboard" onClick={close}>
+                    <Link to="/dashboard" onClick={close} data-tour="nav-dashboard">
                       <LayoutDashboard />
                       <span>Dashboard</span>
                     </Link>
@@ -175,6 +229,15 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {!isStaff && (
+          <SidebarGroup>
+            <SidebarGroupLabel>{user.company_name ?? 'Your company'}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>{renderItems(clientNav)}</SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         <SidebarGroup>
           <SidebarGroupLabel>Tickets</SidebarGroupLabel>
@@ -207,11 +270,11 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
-                  <UserAvatar name={user.name} className="rounded-lg" />
+                <SidebarMenuButton size="lg" data-tour="user-menu" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+                  <UserAvatar name={user.name} userId={user.id} className="rounded-lg" />
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{user.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                    <span className="truncate text-xs text-muted-foreground">{user.role === 'client' && user.company_name ? user.company_name : user.email}</span>
                   </div>
                   <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>
@@ -247,6 +310,27 @@ export function AppSidebar() {
                       </DropdownMenuRadioGroup>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <ALargeSmall />
+                      Text size
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuRadioGroup value={textSize} onValueChange={(v) => setTextSize(v as TextSize)}>
+                        {TEXT_SIZES.map((s) => (
+                          <DropdownMenuRadioItem key={s.value} value={s.value} onSelect={(e) => e.preventDefault()}>
+                            {s.label}
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  {isAdmin && (
+                    <DropdownMenuItem onClick={startTour}>
+                      <Compass />
+                      Platform tour
+                    </DropdownMenuItem>
+                  )}
                   {canInstall && (
                     <DropdownMenuItem onClick={install}>
                       <Download />

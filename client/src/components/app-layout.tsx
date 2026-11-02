@@ -1,23 +1,24 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
-import { Loader2 } from 'lucide-react';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AppSidebar } from '@/components/app-sidebar';
-import { Footer } from '@/components/common';
+import { CompanyLogo, Footer } from '@/components/common';
 import { NotificationBell } from '@/components/notification-bell';
+import { IdleTimeout } from '@/components/idle-timeout';
+import { FullPageLoader } from '@/components/full-page-loader';
+import { MailNotifier } from '@/components/mail-notifier';
 import { useSession } from '@/hooks/use-session';
+import { useNow } from '@/hooks/use-now';
 import { RealtimeProvider, useRealtime } from '@/hooks/use-realtime';
 import { BRAND } from '@/lib/brand';
 import { cn } from '@/lib/utils';
 
-export function FullPageLoader() {
-  return (
-    <div className="flex min-h-svh items-center justify-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" />
-    </div>
-  );
-}
+export { FullPageLoader };
+
+// The tour is only needed once the portal is open, so it loads after the rest.
+const AdminTour = lazy(() => import('@/components/admin-tour').then((m) => ({ default: m.AdminTour })));
 
 function ConnectionStatus() {
   const { connected, presence } = useRealtime();
@@ -43,6 +44,32 @@ function ConnectionStatus() {
   );
 }
 
+const dateFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const timeFmt = new Intl.DateTimeFormat('en-GB', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+
+function HeaderClock() {
+  const now = useNow();
+  return (
+    <time dateTime={now.toISOString()} className="flex items-center gap-2 px-2 text-xs text-muted-foreground tabular-nums sm:text-sm">
+      <span className="hidden md:inline">{dateFmt.format(now)}</span>
+      <span className="hidden h-3.5 w-px bg-border md:inline-block" />
+      <span className="font-medium text-foreground">{timeFmt.format(now).toUpperCase()}</span>
+    </time>
+  );
+}
+
+// Clients see which company their account belongs to, next to the portal name.
+function ClientCompany() {
+  const { user } = useSession();
+  if (!user || user.role !== 'client' || !user.company_name) return null;
+  return (
+    <div className="flex min-w-0 items-center gap-2 border-l pl-3" title={`Your company: ${user.company_name}`}>
+      <CompanyLogo src={user.company_logo_url} name={user.company_name} className="size-7" />
+      <span className="truncate text-sm font-medium">{user.company_name}</span>
+    </div>
+  );
+}
+
 export function AppLayout() {
   const { user, loading } = useSession();
   const location = useLocation();
@@ -57,20 +84,29 @@ export function AppLayout() {
     <RealtimeProvider>
       <SidebarProvider>
         <AppSidebar />
+        <IdleTimeout />
+        <Suspense fallback={null}>
+          <AdminTour />
+        </Suspense>
+        <MailNotifier />
         <SidebarInset>
-          <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <header className="sticky top-0 z-10 print:hidden flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-            <span className="truncate text-sm font-medium">{BRAND.company}</span>
+            <span className="hidden truncate text-sm font-medium sm:inline">{BRAND.company}</span>
+            <ClientCompany />
             <div className="ml-auto flex items-center gap-1">
+              <HeaderClock />
               <ConnectionStatus />
-              <NotificationBell />
+              <div data-tour="bell">
+                <NotificationBell />
+              </div>
             </div>
           </header>
           <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 lg:p-8">
             <Outlet />
           </div>
-          <div className="px-4 pb-6">
+          <div className="px-4 pb-6 print:hidden">
             <Footer />
           </div>
         </SidebarInset>
@@ -79,10 +115,16 @@ export function AppLayout() {
   );
 }
 
-// Staff land on the dashboard; clients on their ticket list.
+// Staff land on the dashboard; clients on their home page.
 export function HomeRedirect() {
   const { isStaff } = useSession();
-  return <Navigate to={isStaff ? '/dashboard' : '/tickets'} replace />;
+  return <Navigate to={isStaff ? '/dashboard' : '/home'} replace />;
+}
+
+export function ClientOnly() {
+  const { isStaff } = useSession();
+  if (isStaff) return <Navigate to="/" replace />;
+  return <Outlet />;
 }
 
 export function StaffOnly({ admin = false }: { admin?: boolean }) {
@@ -90,3 +132,5 @@ export function StaffOnly({ admin = false }: { admin?: boolean }) {
   if (admin ? !isAdmin : !isStaff) return <Navigate to="/" replace />;
   return <Outlet />;
 }
+
+export const AdminOnly = () => <StaffOnly admin />;

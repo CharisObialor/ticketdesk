@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, CircleCheck, DatabaseBackup, Download, Loader2, Mail, MailOpen, Timer } from 'lucide-react';
+import { CircleAlert, CircleCheck, DatabaseBackup, Download, Loader2, Lock, Mail, MailOpen, Timer, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,17 +8,24 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PageHeader } from '@/components/common';
+import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
+import { useSession } from '@/hooks/use-session';
+import { DefaultSlaCard } from '@/components/sla-editor';
+import { EscalationRulesCard } from '@/components/escalation-rules';
 import { api, errorMessage } from '@/lib/api';
 import { fileSize, timeAgo } from '@/lib/format';
+import { apiHref } from '@/lib/api';
 
 interface SystemInfo {
   backups: { name: string; size: number; created_at: string }[];
   lastBackup: { ok: boolean; reason: string; name?: string; error?: string; finished_at: string; filesCopied?: number } | null;
   backupHour: number;
   backupKeep: number;
-  email: { outgoing: boolean; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
+  email: { outgoing: boolean; provider: 'microsoft365' | 'smtp' | 'none'; mailbox: string | null; sendAsStaff: string[] | null; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
   autoCloseDays: number;
   chatDigestMinutes: number;
+  sessionIdleMinutes: number;
+  outbox: { pending: number; oldestPending: string | null; failedCount: number; failed: { id: number; recipient: string; subject: string | null; attempts: number; last_error: string | null; created_at: string }[] };
 }
 
 const isoAgo = (iso: string) => timeAgo(iso.slice(0, 19).replace('T', ' '));
@@ -29,6 +37,15 @@ export default function SystemPage() {
     mutationFn: () => api.post<{ name: string }>('/system/backups'),
     onSuccess: (r) => {
       toast.success('Backup complete', { description: r.name });
+      qc.invalidateQueries({ queryKey: ['system'] });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  const retry = useMutation({
+    mutationFn: () => api.post('/system/outbox/retry', {}),
+    onSuccess: () => {
+      toast.success('Failed emails queued again');
       qc.invalidateQueries({ queryKey: ['system'] });
     },
     onError: (err) => toast.error(errorMessage(err)),
@@ -55,7 +72,18 @@ export default function SystemPage() {
           icon={Mail}
           title="Outgoing email"
           ok={s.email.outgoing}
-          lines={[s.email.outgoing ? 'Sending through your SMTP server' : 'SMTP not configured: emails are only logged', 'Set SMTP_HOST and related settings in .env']}
+          lines={
+            s.email.provider === 'microsoft365'
+              ? [
+                  `Sending through Microsoft 365${s.email.mailbox ? ` as ${s.email.mailbox}` : ''}`,
+                  s.email.sendAsStaff?.length
+                    ? `Staff on ${s.email.sendAsStaff.join(', ')} send from their own mailbox`
+                    : 'All email is sent from the support mailbox',
+                ]
+              : s.email.provider === 'smtp'
+                ? [`Sending through SMTP${s.email.mailbox ? ` as ${s.email.mailbox}` : ''}`, 'Set with SMTP_* settings in .env']
+                : ['Not configured: emails are only logged', 'For Microsoft 365, set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET and MS_MAILBOX in .env']
+          }
         />
         <StatusCard
           icon={MailOpen}
@@ -67,10 +95,49 @@ export default function SystemPage() {
                   `Checking ${inbound.address ?? 'the support mailbox'}`,
                   inbound.lastError ? `Last check failed: ${inbound.lastError}` : inbound.lastRunAt ? `Last checked ${isoAgo(inbound.lastRunAt)}, ${inbound.processed} emails processed` : 'Waiting for first check',
                 ]
-              : ['Off. Set IMAP_HOST in .env to let people reply to notification emails.']
+              : ['Off. With Microsoft 365 it turns on automatically once the MS_* settings are in .env.']
           }
         />
       </div>
+
+      <DefaultSlaCard />
+      <EscalationRulesCard />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Email outbox</CardTitle>
+          <CardDescription>
+            Every email is saved here first and retried automatically for up to a day if the internet or Microsoft is unavailable.
+          </CardDescription>
+          {s.outbox.failedCount > 0 && (
+            <CardAction>
+              <Button variant="outline" onClick={() => retry.mutate()} disabled={retry.isPending}>
+                {retry.isPending ? <Loader2 className="animate-spin" /> : <Mail />}
+                Retry failed
+              </Button>
+            </CardAction>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            {s.outbox.pending ? `${s.outbox.pending} waiting to be sent${s.outbox.oldestPending ? ` (oldest from ${timeAgo(s.outbox.oldestPending)})` : ''}.` : 'Nothing waiting.'}{' '}
+            {s.outbox.failedCount ? `${s.outbox.failedCount} failed.` : 'No failures.'}
+          </p>
+          {s.outbox.failed.length > 0 && (
+            <ul className="divide-y rounded-md border">
+              {s.outbox.failed.map((f) => (
+                <li key={f.id} className="px-3 py-2">
+                  <div className="truncate font-medium">{f.subject || '(no subject)'}</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    To {f.recipient} · {timeAgo(f.created_at)} · {f.attempts} attempts
+                  </div>
+                  {f.last_error && <div className="mt-0.5 text-xs break-words text-red-700 dark:text-red-400">{f.last_error}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -106,7 +173,7 @@ export default function SystemPage() {
                     <TableCell className="text-right tabular-nums">{fileSize(b.size)}</TableCell>
                     <TableCell className="pr-6">
                       <Button variant="ghost" size="icon-sm" asChild>
-                        <a href={`/api/system/backups/${b.name}`} aria-label={`Download ${b.name}`}>
+                        <a href={apiHref(`/api/system/backups/${b.name}`)} aria-label={`Download ${b.name}`}>
                           <Download />
                         </a>
                       </Button>
@@ -123,7 +190,16 @@ export default function SystemPage() {
         <CardHeader>
           <CardTitle>Automatic housekeeping</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+        <CardContent className="grid gap-4 text-sm sm:grid-cols-3">
+          <div className="flex gap-3">
+            <Lock className="mt-0.5 size-4 text-muted-foreground" />
+            <div>
+              <div className="font-medium">Inactivity sign-out</div>
+              <div className="text-muted-foreground">
+                {s.sessionIdleMinutes > 0 ? `People are signed out after ${s.sessionIdleMinutes} minutes without activity (SESSION_IDLE_MINUTES).` : 'Off (SESSION_IDLE_MINUTES=0).'}
+              </div>
+            </div>
+          </div>
           <div className="flex gap-3">
             <Timer className="mt-0.5 size-4 text-muted-foreground" />
             <div>
@@ -144,7 +220,60 @@ export default function SystemPage() {
           </div>
         </CardContent>
       </Card>
+
+      <ClearTicketsCard />
     </>
+  );
+}
+
+const CLEAR_PHRASE = 'CLEAR ALL TICKETS';
+
+// The account owner can wipe every ticket for a fresh start (a backup is taken first, on the server).
+function ClearTicketsCard() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  if (!user?.is_owner) return null;
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle>Clear all tickets</CardTitle>
+        <CardDescription>Start again with no tickets. Only you, as the account owner, can see this.</CardDescription>
+        <CardAction>
+          <Button variant="destructive" onClick={() => setOpen(true)}>
+            <Trash2 />
+            Clear all tickets
+          </Button>
+        </CardAction>
+      </CardHeader>
+      {open && (
+        <DeleteForeverDialog
+          title="Clear all tickets"
+          confirmWord={CLEAR_PHRASE}
+          onClose={() => setOpen(false)}
+          onConfirm={async () => {
+            const r = await api.post<{ tickets: number; backup: string }>('/system/clear-tickets', { confirm: CLEAR_PHRASE });
+            toast.success(`${r.tickets} tickets cleared`, { description: `Backup saved first: ${r.backup}` });
+            qc.removeQueries({ queryKey: ['ticket'] });
+            qc.invalidateQueries();
+          }}
+        >
+          <p>Every ticket on the platform is removed, with:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>their conversations, internal notes, files and saved transcripts</li>
+            <li>visits, sign-offs, client ratings and admin ratings</li>
+            <li>ticket notifications, to-do items and ticket emails not yet sent</li>
+          </ul>
+          <p>
+            The dashboard, reports, performance figures and statements start from zero, and new tickets are numbered from #1. Replies to emails about old
+            tickets are no longer accepted.
+          </p>
+          <p className="text-muted-foreground">
+            A full backup is taken on the server first; if it fails, nothing is deleted. Companies, users, sites, technicians and chats stay.
+          </p>
+        </DeleteForeverDialog>
+      )}
+    </Card>
   );
 }
 
@@ -152,7 +281,7 @@ function StatusCard({ icon: Icon, title, ok, lines }: { icon: typeof Mail; title
   return (
     <Card className="gap-3">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
+        <CardTitle className="type-h5 flex items-center gap-2">
           <Icon className="size-4 text-muted-foreground" />
           {title}
         </CardTitle>

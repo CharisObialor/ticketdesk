@@ -49,6 +49,18 @@ function isAutomated(parsed) {
   );
 }
 
+// The From address of an email can be forged. Mail without our signed reply address is only trusted when the
+// receiving server (Microsoft 365, cPanel) recorded a passing SPF/DKIM/DMARC check, or it came from inside the
+// Microsoft 365 organisation.
+function senderVerified(parsed) {
+  if (!config.inbound.requireVerifiedSender) return true;
+  const lines = (parsed.headerLines || []).map((h) => ({ key: h.key, value: String(h.line).toLowerCase() }));
+  if (lines.some((h) => h.key === 'x-ms-exchange-organization-authas' && /:\s*internal/.test(h.value))) return true;
+  const results = lines.filter((h) => h.key === 'authentication-results').map((h) => h.value).join(' ');
+  if (/\b(dmarc|compauth)=fail\b/.test(results)) return false;
+  return /\b(dmarc|compauth|dkim|spf)=pass\b/.test(results);
+}
+
 // Saves real attachments (skips small inline images, which are usually signatures and logos).
 async function saveAttachments(parsed) {
   const files = [];
@@ -63,6 +75,23 @@ async function saveAttachments(parsed) {
   return files;
 }
 
+// A reply from a CC/BCC participant who has no portal account. Accepted only when they were copied on this ticket
+// and the sender passes SPF/DKIM/DMARC; it is posted as an external message.
+async function processExternal(parsed, fromAddr, ticketId) {
+  const ticket = await svc.getTicket(ticketId);
+  if (!ticket || ticket.status === 'closed') return 'ignored: ticket closed or missing';
+  const like = `%"${fromAddr.replace(/[%_"\\]/g, '')}"%`;
+  const participant = await db.one('SELECT id FROM messages WHERE ticket_id = ? AND (cc LIKE ? OR bcc LIKE ?) LIMIT 1', [ticket.id, like, like]);
+  if (!participant) return `ignored: ${fromAddr} was not copied on ticket #${ticket.id}`;
+  if (!senderVerified(parsed)) return `ignored: sender ${fromAddr} could not be verified (no SPF/DKIM/DMARC pass)`;
+  const files = await saveAttachments(parsed);
+  const body = stripReply(parsed.text || (parsed.html ? parsed.html.replace(/<[^>]+>/g, ' ') : ''));
+  if (!body && !files.length) return 'ignored: empty';
+  const name = String((parsed.from.value[0] && parsed.from.value[0].name) || fromAddr).slice(0, 190);
+  await svc.postReply(ticket, { external: true, id: 0, name, email: fromAddr, role: 'external' }, { body: body || '(attachment)', files });
+  return `external reply from ${fromAddr} added to ticket #${ticket.id}`;
+}
+
 // Handles one parsed email. Returns a short description of what happened (for logs and tests).
 async function processMessage(parsed) {
   if (isAutomated(parsed)) return 'ignored: automated';
@@ -74,19 +103,32 @@ async function processMessage(parsed) {
         [fromAddr]
       )
     : null;
-  if (!user || (user.role === 'client' && Number(user.company_active) === 0)) return `ignored: unknown sender ${fromAddr}`;
-
   const recipients = ['to', 'cc', 'bcc']
     .flatMap((k) => (parsed[k] ? [].concat(parsed[k]).flatMap((v) => v.value.map((x) => x.address)) : []))
     .concat([parsed.headers.get('delivered-to'), parsed.headers.get('x-original-to')].flat().filter(Boolean).map(String));
+  const token = parseReplyAddress(recipients);
+
+  if (config.inbound.repliesOnly && !token) return 'ignored: not sent to a portal reply address (replies-only mode)';
+  if (!user || (user.role === 'client' && Number(user.company_active) === 0)) {
+    // Someone outside the portal replying on a ticket thread they were CC'd or BCC'd on by an admin.
+    if (token && token.userId === 0 && fromAddr) return processExternal(parsed, fromAddr, token.ticketId);
+    return `ignored: unknown sender ${fromAddr}`;
+  }
 
   // Find the ticket: a signed reply address is best; otherwise "[Ticket #N]" in the subject from someone with access.
   let ticket = null;
-  const token = parseReplyAddress(recipients);
+  if (token && token.userId === 0) {
+    const t = await svc.getTicket(token.ticketId);
+    if (t && canAccessTicket(user, t)) ticket = t;
+  }
   if (token && token.userId === user.id) ticket = await svc.getTicket(token.ticketId);
+  if (!ticket && !senderVerified(parsed)) return `ignored: sender ${fromAddr} could not be verified (no SPF/DKIM/DMARC pass)`;
   if (!ticket) {
     const m = /\[Ticket #(\d+)\]/i.exec(parsed.subject || '');
-    if (m) ticket = await svc.getTicket(Number(m[1]));
+    const found = m && (await svc.getTicket(Number(m[1])));
+    // Only when the subject also matches, so a reply to an old email cannot land on a newer ticket with that number.
+    const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (found && norm(parsed.subject).includes(norm(found.subject).slice(0, 60))) ticket = found;
   }
   if (ticket && !canAccessTicket(user, ticket)) return 'ignored: no access to ticket';
 
@@ -115,7 +157,7 @@ async function processMessage(parsed) {
 
   // No ticket reference: a client emailing support opens a new ticket.
   if (user.role === 'client' && user.company_id) {
-    const subject = String(parsed.subject || '').replace(/^\s*((re|fw|fwd)\s*:\s*)+/i, '').trim() || 'Support request by email';
+    const subject = String(parsed.subject || '').replace(/[\r\n\t]+/g, ' ').replace(/^\s*((re|fw|fwd)\s*:\s*)+/i, '').trim() || 'Support request by email';
     const t = await svc.createTicket({
       actor: user,
       companyId: user.company_id,
@@ -132,6 +174,41 @@ async function processMessage(parsed) {
 // Checks the mailbox for unread mail, processes each message, then marks it read.
 async function poll() {
   if (!config.inbound.enabled || running) return;
+  return config.mailProvider === 'graph' && config.graph.clientId ? pollGraph() : pollImap();
+}
+
+// Microsoft 365: reads unread inbox messages through Microsoft Graph.
+async function pollGraph() {
+  running = true;
+  const graph = require('./msgraph');
+  const { simpleParser } = require('mailparser');
+  try {
+    // In replies-only mode, look at recipients only and pick out mail sent to a portal reply address.
+    const ids = config.inbound.repliesOnly
+      ? (await graph.listUnreadRecipients()).filter((m) => parseReplyAddress(m.recipients)).map((m) => m.id)
+      : await graph.listUnread();
+    for (const id of ids) {
+      let outcome;
+      try {
+        outcome = await processMessage(await simpleParser(await graph.getMime(id)));
+      } catch (err) {
+        outcome = `error: ${err.message}`;
+      }
+      await graph.markRead(id);
+      status.processed++;
+      console.log(`[inbound] ${id.slice(-12)}: ${outcome}`);
+    }
+    status.lastError = null;
+  } catch (err) {
+    status.lastError = err.cause && err.cause.code ? `${err.message} (${err.cause.code})` : err.message;
+    console.error('[inbound] mailbox check failed:', status.lastError);
+  } finally {
+    status.lastRunAt = new Date().toISOString();
+    running = false;
+  }
+}
+
+async function pollImap() {
   running = true;
   const { ImapFlow } = require('imapflow');
   const { simpleParser } = require('mailparser');
@@ -165,8 +242,8 @@ async function poll() {
     await client.logout();
     status.lastError = null;
   } catch (err) {
-    status.lastError = err.message;
-    console.error('[inbound] mailbox check failed:', err.message);
+    status.lastError = err.cause && err.cause.code ? `${err.message} (${err.cause.code})` : err.message;
+    console.error('[inbound] mailbox check failed:', status.lastError);
     client.close();
   } finally {
     status.lastRunAt = new Date().toISOString();

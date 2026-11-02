@@ -15,12 +15,18 @@ import { DropZone, FileChips, useFileList } from '@/components/file-attachments'
 import { ScheduleVisitDialog, SignaturePad, VisitStatusBadge, formatVisitTime } from '@/components/visits';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { formatDateTime, parseTs } from '@/lib/format';
+import { formatDateTime, parseTs, visitDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Visit } from '@/lib/types';
 
 const dayFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-const dayKey = (ts: string) => parseTs(ts)!.toDateString();
+// Local calendar day as 'YYYY-M-D', read back with new Date(y, m, d), which every browser handles the same way.
+const localKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+const dayKey = (ts: string) => localKey(parseTs(ts) ?? new Date());
+const keyDate = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
 
 export default function VisitsPage() {
   const { isAdmin } = useSession();
@@ -41,7 +47,7 @@ export default function VisitsPage() {
     if (last && last[0] === k) last[1].push(v);
     else days.push([k, [v]]);
   }
-  const today = new Date().toDateString();
+  const today = localKey(new Date());
 
   return (
     <>
@@ -81,7 +87,7 @@ export default function VisitsPage() {
             <section key={key} className="space-y-2">
               <h2 className={cn('text-sm font-medium', key === today ? 'text-primary' : 'text-muted-foreground')}>
                 {key === today ? 'Today · ' : ''}
-                {dayFmt.format(new Date(key))}
+                {dayFmt.format(keyDate(key))}
               </h2>
               <div className="grid gap-2">
                 {list.map((v) => (
@@ -181,7 +187,7 @@ export function VisitDetailPage() {
 
       <Card>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Info icon={CalendarClock} label="When" value={`${formatVisitTime(v.scheduled_at)} (${v.duration_min} min)`} />
+          <Info icon={CalendarClock} label="When" value={`${formatVisitTime(v.scheduled_at)} (${visitDuration(v.duration_min)})`} />
           <Info icon={UserRound} label="Technician" value={v.technician_name ?? 'Unassigned'} />
           <Info icon={MapPin} label="Location" value={v.location || v.company_name || '-'} />
           <Info icon={Phone} label="Client contact" value={v.requester_name ?? '-'} />

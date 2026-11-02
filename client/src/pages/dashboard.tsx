@@ -7,6 +7,7 @@ import {
   Clock,
   Gauge,
   Inbox,
+  ListTodo,
   Star,
   Ticket as TicketIcon,
   Timer,
@@ -18,11 +19,13 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { Progress } from '@/components/ui/progress';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { PageHeader, UserAvatar } from '@/components/common';
+import { Greeting, PageHeader, UserAvatar } from '@/components/common';
 import { Stars } from '@/components/rating';
+import { PeriodPicker, periodKey, periodQuery, type Period } from '@/components/period-picker';
+import { ActionCard, useActions } from '@/pages/actions';
+import { Button } from '@/components/ui/button';
 import { PriorityBadge, StatusBadge } from '@/components/ticket-badges';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
@@ -31,12 +34,6 @@ import { PRIORITY_LABELS, ROLE_LABELS, duration, timeAgo } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Metrics } from '@/lib/types';
 
-const RANGES = [
-  { value: '7', label: 'Last 7 days' },
-  { value: '30', label: 'Last 30 days' },
-  { value: '90', label: 'Last 90 days' },
-  { value: '365', label: 'Last 12 months' },
-];
 
 const trendConfig = {
   created: { label: 'Raised', color: 'var(--chart-1)' },
@@ -48,11 +45,11 @@ const shortDate = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'sho
 const fmtKey = (k: string) => shortDate.format(new Date(k + 'T00:00:00Z'));
 
 export default function DashboardPage() {
-  const { user } = useSession();
-  const [days, setDays] = useState('30');
+  const { user, isAdmin, app } = useSession();
+  const [period, setPeriod] = useState<Period>({ days: '30' });
   const metrics = useQuery({
-    queryKey: ['metrics', days],
-    queryFn: () => api.get<Metrics>(`/metrics?days=${days}`),
+    queryKey: ['metrics', periodKey(period)],
+    queryFn: () => api.get<Metrics>(`/metrics?${periodQuery(period)}`),
     refetchInterval: 60_000,
   });
   const m = metrics.data;
@@ -60,23 +57,14 @@ export default function DashboardPage() {
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        description={`Welcome back, ${user?.name.split(' ')[0]}. Here is how support is performing.`}
+        title={user ? <Greeting name={user.name} /> : 'Dashboard'}
+        description="Here is how support is performing."
         actions={
-          <Select value={days} onValueChange={setDays}>
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {RANGES.map((r) => (
-                <SelectItem key={r.value} value={r.value}>
-                  {r.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <PeriodPicker value={period} onChange={setPeriod} />
         }
       />
+
+      {isAdmin && <NeedsAttention aiEnabled={!!app?.ai} />}
 
       {!m ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -164,6 +152,37 @@ export default function DashboardPage() {
         </>
       )}
     </>
+  );
+}
+
+// Top of the dashboard for admins: the most pressing suggested actions.
+function NeedsAttention({ aiEnabled }: { aiEnabled: boolean }) {
+  const actions = useActions();
+  const items = actions.data?.items ?? [];
+  if (!actions.data || items.length === 0) return null;
+  return (
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ListTodo className="size-4 text-primary" />
+          Needs attention
+        </CardTitle>
+        <CardDescription>
+          {actions.data.counts.urgent ? `${actions.data.counts.urgent} urgent, ` : ''}
+          {items.length} in total
+        </CardDescription>
+        <CardAction>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/actions">View all</Link>
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {items.slice(0, 3).map((i) => (
+          <ActionCard key={i.key} item={i} aiEnabled={aiEnabled} compact />
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -265,6 +284,25 @@ function SatisfactionCard({ metrics: m }: { metrics: Metrics }) {
           </>
         )}
       </CardContent>
+      {!!m.adminRatings?.length && (
+        <CardContent className="space-y-2 border-t pt-4">
+          <div className="text-sm font-medium">Ratings for our admins</div>
+          <p className="text-xs text-muted-foreground">How clients rated each admin's handling of their jobs in this period.</p>
+          <ul className="divide-y rounded-md border">
+            {m.adminRatings.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate font-medium">{a.name}</span>
+                <Stars value={a.avgRating} size="size-3.5" />
+                <span className="w-8 text-right tabular-nums">{a.avgRating.toFixed(1)}</span>
+                <span className="w-24 text-right text-xs text-muted-foreground">
+                  {a.ratings} rating{a.ratings === 1 ? '' : 's'}
+                  {a.low > 0 && <span className="text-destructive">, {a.low} low</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      )}
     </Card>
   );
 }
@@ -321,7 +359,7 @@ function TeamCard({ metrics: m }: { metrics: Metrics }) {
                 <TableCell className="pl-6">
                   <div className="flex items-center gap-3">
                     <div className="relative">
-                      <UserAvatar name={a.name} />
+                      <UserAvatar name={a.name} userId={a.id} />
                       <span className={cn('absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-card', online.has(a.id) ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-600')} />
                     </div>
                     <div className="min-w-0">

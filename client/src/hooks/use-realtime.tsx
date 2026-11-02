@@ -4,6 +4,7 @@ import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { useSession } from '@/hooks/use-session';
 import type { ChatGroup, ChatMember, ChatMessage, Message, Presence, ReadReceipt, Role, Ticket } from '@/lib/types';
+import { API_BASE } from '@/lib/api';
 
 interface TicketData {
   ticket: Ticket;
@@ -56,7 +57,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    const socket = io({ withCredentials: true });
+    // The live host's web server does not pass WebSockets through to the API, so the separate API is reached with
+    // ordinary requests (long-polling) from the start instead of failing an upgrade on every page.
+    const socket = API_BASE ? io(API_BASE, { withCredentials: true, transports: ['polling'] }) : io({ withCredentials: true });
     socketRef.current = socket;
 
     const refreshLists = () => {
@@ -70,17 +73,28 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
 
     socket.on('connect', () => setConnected(true));
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('disconnect', (reason) => {
+      setConnected(false);
+      // The server closed the connection because the account changed: re-check the session, then reconnect.
+      if (reason === 'io server disconnect') {
+        qc.invalidateQueries({ queryKey: ['me'] }).then(() => {
+          if (qc.getQueryData(['me'])) socket.connect();
+        });
+      }
+    });
     socket.on('presence', (p: Presence) => setPresence(p));
     socket.on('message:new', ({ ticketId, message }: { ticketId: number; message: Message }) => {
       qc.setQueryData<TicketData>(['ticket', ticketId], (prev) =>
         prev && !prev.messages.some((m) => m.id === message.id) ? { ...prev, messages: [...prev.messages, message] } : prev
       );
       if (message.user_id) setTyping((t) => setTypingEntry(t, ticketId, message.user_id!, null));
+      // The assistant's analysis depends on the conversation.
+      qc.invalidateQueries({ queryKey: ['ai', ticketId] });
       refreshLists();
     });
     socket.on('ticket:update', ({ ticket }: { ticket: Ticket }) => {
       putTicket(ticket);
+      qc.invalidateQueries({ queryKey: ['ai', ticket.id] });
       refreshLists();
     });
     socket.on('ticket:new', ({ ticket }: { ticket: Ticket }) => {
@@ -88,6 +102,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (isStaff && ticket.created_by !== user.id) {
         toast.info(`New ticket #${ticket.id}`, { description: `${ticket.company_name}: ${ticket.subject}` });
       }
+    });
+    // The owner cleared every ticket: drop everything held about tickets and load afresh.
+    socket.on('tickets:cleared', () => {
+      qc.removeQueries({ queryKey: ['ticket'] });
+      qc.invalidateQueries();
+    });
+    // The owner deleted a ticket: drop it from what is open and from the lists.
+    socket.on('ticket:deleted', ({ ticketId }: { ticketId: number }) => {
+      qc.removeQueries({ queryKey: ['ticket', ticketId] });
+      refreshLists();
     });
     socket.on('ticket:escalated', ({ ticket }: { ticket: Ticket }) => {
       putTicket(ticket);
@@ -115,6 +139,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('message:updated', ({ ticketId, message }: { ticketId: number; message: Message }) => {
       qc.setQueryData<TicketData>(['ticket', ticketId], (prev) =>
         prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
+      );
+    });
+    // Admin chats.
+    socket.on('team:message', ({ chatId, message }: { chatId: number; message: { id: number } }) => {
+      qc.setQueryData<{ messages: { id: number }[] }>(['team', chatId], (prev) =>
+        prev && !prev.messages.some((m) => m.id === message.id) ? { ...prev, messages: [...prev.messages, message] } : prev
+      );
+      qc.invalidateQueries({ queryKey: ['chats'] });
+    });
+    socket.on('team:updated', ({ chatId, message }: { chatId: number; message: { id: number } }) => {
+      qc.setQueryData<{ messages: { id: number }[] }>(['team', chatId], (prev) =>
+        prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
+      );
+    });
+    socket.on('team:read', ({ chatId, userId, lastReadId }: { chatId: number; userId: number; lastReadId: number }) => {
+      qc.setQueryData<{ members: { id: number; last_read_id: number }[] }>(['team', chatId], (prev) =>
+        prev ? { ...prev, members: prev.members.map((m) => (m.id === userId ? { ...m, last_read_id: lastReadId } : m)) } : prev
       );
     });
     socket.on('chat:updated', ({ groupId, message }: { groupId: number; message: ChatMessage }) => {

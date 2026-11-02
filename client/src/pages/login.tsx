@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CircleAlert, Headset, Loader2, MailCheck, MessagesSquare, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, CircleAlert, Clock, Headset, Loader2, MailCheck, MessagesSquare, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,14 +10,17 @@ import { Card, CardContent } from '@/components/ui/card';
 import { BrandLogo, Footer } from '@/components/common';
 import { PasswordChecklist, PasswordInput } from '@/components/password-input';
 import { passwordOk } from '@/lib/password';
-import { FullPageLoader } from '@/components/app-layout';
+import { FullPageLoader } from '@/components/full-page-loader';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
+import { urlKeyInPath } from '@/lib/url-key';
+import type { AppMeta, User } from '@/lib/types';
 
 type Mode = 'signin' | 'forgot' | 'sent' | 'token';
 
 function safeNext(next: string | null) {
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  // Same-site paths only: "//host" and "/\host" are both read by browsers as another website.
+  return next && /^\/(?![/\\])/.test(next) && !/[\\\u0000-\u001f]/.test(next) ? next : '/';
 }
 
 export default function LoginPage() {
@@ -144,7 +147,7 @@ function LoginBackground() {
 function FormHeader({ title, description }: { title: string; description: string }) {
   return (
     <div className="mb-6 space-y-2 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+      <h1 className="type-h2">{title}</h1>
       <p className="text-sm text-muted-foreground">{description}</p>
     </div>
   );
@@ -173,8 +176,10 @@ function SignInForm({ onForgot }: { onForgot: () => void }) {
     setBusy(true);
     setError('');
     try {
-      await api.post('/auth/login', { email, password });
-      await qc.invalidateQueries({ queryKey: ['me'] });
+      // Sign-in answers with the same details as /auth/me, so the portal opens without a second request.
+      qc.setQueryData(['me'], await api.post<{ user: User; app: AppMeta; urlKey: string }>('/auth/login', { email, password }));
+      // The session moves the address onto this sign-in's key (see use-session); this covers the same key.
+      if (!urlKeyInPath) return;
       navigate(safeNext(params.get('next')), { replace: true });
     } catch (err) {
       setError(errorMessage(err));
@@ -186,6 +191,12 @@ function SignInForm({ onForgot }: { onForgot: () => void }) {
   return (
     <form onSubmit={submit} className="grid gap-5">
       <FormHeader title="Sign in to your account" description="Enter your email address and password to continue." />
+      {!error && params.get('reason') === 'idle' && (
+        <Alert>
+          <Clock />
+          <AlertDescription>You were signed out because there was no activity for a while. Please sign in again to continue.</AlertDescription>
+        </Alert>
+      )}
       {error && <ErrorAlert message={error} />}
       <div className="grid gap-2">
         <Label htmlFor="email">Email address</Label>

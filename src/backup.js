@@ -14,20 +14,31 @@ const statusFile = path.join(backupDir, 'last.json');
 // Parents before children, so a restore can insert in this order without breaking foreign keys.
 const TABLES = [
   'companies',
+  'sites',
   'users',
+  'technicians',
   'tickets',
   'messages',
   'attachments',
   'transcripts',
   'ticket_reads',
   'ticket_ratings',
+  'ticket_signoffs',
+  'admin_ratings',
   'site_visits',
   'saved_replies',
   'chat_groups',
   'chat_members',
   'chat_messages',
   'chat_attachments',
+  'team_chats',
+  'team_chat_members',
+  'team_messages',
+  'team_attachments',
   'notifications',
+  'ai_insights',
+  'action_states',
+  'mail_outbox',
 ];
 
 let running = null;

@@ -1,9 +1,16 @@
 import type { Priority, Status } from './types';
 
-// The server stores UTC timestamps as 'YYYY-MM-DD HH:MM:SS'.
+// The server stores UTC timestamps as 'YYYY-MM-DD HH:MM:SS' and dates as 'YYYY-MM-DD'; some values arrive as full
+// ISO strings. Each shape is read explicitly: Safari (iPhone) rejects anything loose, such as '2026-10-01Z'.
+// Returns null for anything that is not a real date, so callers never format an invalid one.
 export function parseTs(s: string | null | undefined): Date | null {
   if (!s) return null;
-  return new Date(s.replace(' ', 'T') + 'Z');
+  const v = String(s).trim();
+  let d: Date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) d = new Date(`${v}T00:00:00Z`);
+  else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) d = new Date(`${v.replace(' ', 'T')}Z`);
+  else d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 const dateTimeFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -22,6 +29,10 @@ export const formatTime = (s: string | null | undefined) => {
   const d = parseTs(s);
   return d ? timeFmt.format(d) : '';
 };
+
+// Shown when marking a ticket resolved has asked the other admins to sign it off.
+export const signoffMessage = (required: number) =>
+  `The ticket will be resolved after sign-off by ${required === 1 ? 'another admin' : `${required} other admins`}. The client is told then.`;
 
 export function timeAgo(s: string | null | undefined) {
   const d = parseTs(s);
@@ -76,3 +87,15 @@ export const initials = (name: string | null | undefined) =>
     .slice(0, 2)
     .map((p) => p[0]?.toUpperCase())
     .join('');
+
+// Site visit lengths in words: "45 minutes", "1 hour 30 minutes", "2 days".
+export function visitDuration(min: number) {
+  if (min >= 1440 && min % 1440 === 0) return min === 10080 ? '1 week' : `${min / 1440} day${min === 1440 ? '' : 's'}`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  const parts = [h && `${h} hour${h === 1 ? '' : 's'}`, m && `${m} minute${m === 1 ? '' : 's'}`].filter(Boolean);
+  return parts.join(' ') || '0 minutes';
+}
+
+// Choices for a visit's expected length, from a quick check to a week-long installation.
+export const VISIT_DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480, 600, 720, 1440, 2880, 4320, 7200, 10080];

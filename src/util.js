@@ -3,8 +3,15 @@ function now(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+// Reads the stored form by position, which is many times faster than Date's string parser (the dashboard
+// and reports parse tens of thousands of these). Anything else falls back to the general parser.
 function parseTs(s) {
-  return s ? new Date(String(s).replace(' ', 'T') + 'Z') : null;
+  if (!s) return null;
+  const v = String(s);
+  if (v.length === 19 && v[4] === '-' && v[7] === '-' && v[10] === ' ' && v[13] === ':') {
+    return new Date(Date.UTC(+v.slice(0, 4), +v.slice(5, 7) - 1, +v.slice(8, 10), +v.slice(11, 13), +v.slice(14, 16), +v.slice(17, 19)));
+  }
+  return new Date(v.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(v) ? '' : 'Z'));
 }
 
 class HttpError extends Error {
@@ -24,7 +31,15 @@ function escapeHtml(s) {
 function errorHandler(err, req, res, next) {
   if (err.name === 'MulterError') {
     const msg =
-      err.code === 'LIMIT_FILE_SIZE' ? 'File is too large' : err.code === 'LIMIT_FILE_COUNT' ? 'Too many files' : err.message;
+      err.code === 'LIMIT_FILE_SIZE'
+        ? String(req.originalUrl).startsWith('/api/mail/send')
+          ? `Attachments are too large (${require('./config').mailUpload.maxTotalMb} MB per email at most)`
+          : `File is too large (${require('./config').upload.maxMb} MB per file at most)`
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? /\/work-updates$/.test(req.path)
+            ? `Too many photos (${require('./config').workUpload.maxFiles} per work update at most)`
+            : `Too many files (${require('./config').upload.maxFiles} per message at most)`
+          : err.message;
     return res.status(400).json({ error: msg });
   }
   const status = err.status || 500;
