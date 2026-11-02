@@ -37,10 +37,10 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MentionText, MentionTextarea, type MentionPerson } from '@/components/mention-textarea';
+import { MessageBody, PinnedBar, ReplyBar } from '@/components/chat-actions';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
 import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
-import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
 import {
   MessageScroller,
@@ -379,6 +379,7 @@ function GroupPane({ groupId }: { groupId: number }) {
   const { user } = useSession();
   const { groupTypingFor } = useRealtime();
   const [showMembers, setShowMembers] = useState(false);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const query = useQuery({
     queryKey: ['group', groupId],
     queryFn: () => api.get<GroupData>(`/chats/groups/${groupId}`),
@@ -429,6 +430,7 @@ function GroupPane({ groupId }: { groupId: number }) {
           </Button>
         }
       />
+      <PinnedBar pins={query.data.pins} scope="group" conversationId={groupId} />
       {/* shadcn chat layout: opens at the newest message, follows new ones while you are at the bottom. */}
       <MessageScrollerProvider key={groupId} autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
@@ -436,7 +438,18 @@ function GroupPane({ groupId }: { groupId: number }) {
             <MessageScrollerContent className="gap-1 px-4 py-4">
               {messages.map((m, i) => (
                 <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
-                  <ChatBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} names={names} me={user?.name} />
+                  <ChatBubble
+                    message={m}
+                    prev={messages[i - 1]}
+                    own={m.user_id === user?.id}
+                    seenBy={m.id === lastMine?.id ? seenBy : undefined}
+                    names={names}
+                    me={user?.name}
+                    onReply={() => {
+                      setReplyTo(m);
+                      focusComposer();
+                    }}
+                  />
                 </MessageScrollerItem>
               ))}
               {typing.length > 0 && (
@@ -462,11 +475,14 @@ function GroupPane({ groupId }: { groupId: number }) {
           </Alert>
         </div>
       )}
-      <GroupComposer groupId={groupId} people={people} />
+      <GroupComposer groupId={groupId} people={people} replyTo={replyTo} onCancelReply={() => setReplyTo(null)} />
       {showMembers && <MembersSheet data={query.data} onClose={() => setShowMembers(false)} />}
     </>
   );
 }
+
+// Puts the cursor in the open chat's message box (after choosing Reply).
+const focusComposer = () => requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-composer] textarea')?.focus());
 
 function PaneSkeleton() {
   return (
@@ -489,6 +505,7 @@ function ChatBubble({
   seenBy,
   names,
   me,
+  onReply,
 }: {
   message: ChatMessage;
   prev?: ChatMessage;
@@ -496,6 +513,7 @@ function ChatBubble({
   seenBy?: string[];
   names: string[];
   me?: string;
+  onReply: () => void;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -519,11 +537,11 @@ function ChatBubble({
   const grouped = sameBlock(prev, m);
   const staff = isStaffRole(m.user_role);
   return (
-    <UiMessage align={own ? 'end' : 'start'} className={cn(!grouped && 'pt-3')}>
+    <UiMessage id={`msg-group-${m.id}`} align={own ? 'end' : 'start'} className={cn('rounded-lg', !grouped && 'pt-3')}>
       <MessageAvatar className={cn('self-start', (grouped || own) && 'invisible')}>
         {!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} />}
       </MessageAvatar>
-      <MessageContent className="max-w-[75%] gap-1">
+      <MessageContent className="group/bubble max-w-[75%] gap-1">
         {!grouped && (
           <MessageHeader className={cn('gap-2 px-0 font-normal text-foreground', own && 'flex-row-reverse')}>
             <span className="font-medium">{own ? 'You' : (m.user_name ?? 'Deleted user')}</span>
@@ -537,36 +555,22 @@ function ChatBubble({
             </span>
           </MessageHeader>
         )}
-        {editing ? (
-          <div className="w-72 max-w-full">
-            <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
-          </div>
-        ) : m.body === '(attachment)' && m.attachments.length > 0 ? null : (
-          <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>
-                <MentionText text={m.body} names={names} me={own ? null : me} />
-              </BubbleContent>
-            </Bubble>
-            {own && (
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover/bubble:opacity-100 focus-visible:opacity-100"
-                onClick={() => setEditing(true)}
-                aria-label="Edit message"
-              >
-                <Pencil />
-              </Button>
-            )}
-          </div>
-        )}
-        {m.edited_at && !editing && (
-          <span className={cn('text-[10px] text-muted-foreground italic', own && 'self-end')} title={`Edited ${formatDateTime(m.edited_at)}`}>
-            edited
-          </span>
-        )}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/chats/files')} align={own ? 'end' : 'start'} />}
+        <MessageBody
+          message={m}
+          own={own}
+          scope="group"
+          conversationId={m.group_id}
+          editing={editing}
+          editor={
+            <div className="w-72 max-w-full">
+              <EditBox initial={m.body} busy={save.isPending} onCancel={() => setEditing(false)} onSave={(body) => save.mutate(body)} />
+            </div>
+          }
+          text={<MentionText text={m.body} names={names} me={own ? null : me} />}
+          attachments={<Attachments items={m.attachments} base={apiHref('/api/chats/files')} align={own ? 'end' : 'start'} />}
+          onReply={onReply}
+          onEdit={() => setEditing(true)}
+        />
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
@@ -578,8 +582,19 @@ function ChatBubble({
   );
 }
 
-function GroupComposer({ groupId, people }: { groupId: number; people: MentionPerson[] }) {
+function GroupComposer({
+  groupId,
+  people,
+  replyTo,
+  onCancelReply,
+}: {
+  groupId: number;
+  people: MentionPerson[];
+  replyTo: ChatMessage | null;
+  onCancelReply: () => void;
+}) {
   const qc = useQueryClient();
+  const { user } = useSession();
   const { sendGroupTyping } = useRealtime();
   const files = useFileList({ kind: 'message' });
   const [body, setBody] = useState('');
@@ -601,6 +616,7 @@ function GroupComposer({ groupId, people }: { groupId: number; people: MentionPe
     stopTyping();
     const fd = new FormData();
     fd.set('body', body.trim());
+    if (replyTo) fd.set('reply_to_id', String(replyTo.id));
     for (const f of files.files) fd.append('files', f);
     try {
       const { message } = await api.post<{ message: ChatMessage }>(`/chats/groups/${groupId}/messages`, fd);
@@ -611,6 +627,7 @@ function GroupComposer({ groupId, people }: { groupId: number; people: MentionPe
       qc.invalidateQueries({ queryKey: ['chats'] });
       setBody('');
       files.clear();
+      onCancelReply();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -622,11 +639,15 @@ function GroupComposer({ groupId, people }: { groupId: number; people: MentionPe
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
+    } else if (e.key === 'Escape' && replyTo) {
+      e.preventDefault();
+      onCancelReply();
     }
   };
 
   return (
-    <form onSubmit={submit} className="space-y-2 border-t p-3">
+    <form onSubmit={submit} data-composer className="space-y-2 border-t p-3">
+      {replyTo && <ReplyBar message={replyTo} meId={user?.id} onCancel={onCancelReply} />}
       <FileChips list={files} />
       <div className="flex items-end gap-2">
         <AttachButton list={files} />

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { useSession } from '@/hooks/use-session';
-import type { ChatGroup, ChatMember, ChatMessage, Message, Presence, ReadReceipt, Role, Ticket } from '@/lib/types';
+import type { ChatGroup, ChatMember, ChatMessage, Message, PinnedMessage, Presence, ReadReceipt, Role, Ticket } from '@/lib/types';
 import { API_BASE } from '@/lib/api';
 
 interface TicketData {
@@ -17,6 +17,7 @@ export interface GroupData {
   group: ChatGroup;
   members: ChatMember[];
   messages: ChatMessage[];
+  pins?: PinnedMessage[];
 }
 
 interface Realtime {
@@ -148,10 +149,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       );
       qc.invalidateQueries({ queryKey: ['chats'] });
     });
-    socket.on('team:updated', ({ chatId, message }: { chatId: number; message: { id: number } }) => {
+    socket.on('team:updated', ({ chatId, message }: { chatId: number; message: { id: number; pinned?: boolean; deleted?: boolean } }) => {
+      const before = qc.getQueryData<{ messages: { id: number; pinned?: boolean; deleted?: boolean }[] }>(['team', chatId])?.messages.find((m) => m.id === message.id);
       qc.setQueryData<{ messages: { id: number }[] }>(['team', chatId], (prev) =>
         prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
       );
+      // A pin added or removed (or a pinned message deleted) changes the pinned bar.
+      if (before && (!!before.pinned !== !!message.pinned || !!before.deleted !== !!message.deleted)) qc.invalidateQueries({ queryKey: ['team', chatId] });
     });
     socket.on('team:read', ({ chatId, userId, lastReadId }: { chatId: number; userId: number; lastReadId: number }) => {
       qc.setQueryData<{ members: { id: number; last_read_id: number }[] }>(['team', chatId], (prev) =>
@@ -159,9 +163,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       );
     });
     socket.on('chat:updated', ({ groupId, message }: { groupId: number; message: ChatMessage }) => {
+      const before = qc.getQueryData<GroupData>(['group', groupId])?.messages.find((m) => m.id === message.id);
       qc.setQueryData<GroupData>(['group', groupId], (prev) =>
         prev ? { ...prev, messages: prev.messages.map((m) => (m.id === message.id ? message : m)) } : prev
       );
+      if (before && (!!before.pinned !== !!message.pinned || !!before.deleted !== !!message.deleted)) qc.invalidateQueries({ queryKey: ['group', groupId] });
     });
     // "Seen" indicators.
     socket.on('ticket:read', ({ ticketId, userId, name, role, lastReadId }: { ticketId: number; userId: number; name: string; role: Role; lastReadId: number }) => {

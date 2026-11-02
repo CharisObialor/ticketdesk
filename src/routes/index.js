@@ -51,6 +51,7 @@ router.use(adminOnlyPaths(/^\/(actions|tickets\/\d+\/ai)(\/|$)/, require('./acti
 router.use('/tickets', require('./tickets'));
 router.use('/metrics', require('./metrics'));
 router.use('/reports', require('./reports'));
+router.use('/chat-messages', require('./chat-actions'));
 router.use('/chats', require('./chats'));
 router.use('/mail', require('./mail'));
 router.use(require('./files'));

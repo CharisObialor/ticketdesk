@@ -47,6 +47,7 @@ function sessionInfo(user, session) {
       // Clients of companies that ask for the site's OM and FSE on each new ticket.
       siteContacts: user.role === 'client' && !!Number(user.company_site_contacts),
       autoCloseDays: config.autoCloseDays,
+      chat: config.chat,
       replyByEmail: config.inbound.enabled,
       sessionIdleMinutes: config.sessionIdleMinutes,
       // The admin's own Microsoft 365 mailbox for the Mail page and CC/BCC on replies (null when not available).

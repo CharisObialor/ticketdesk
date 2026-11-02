@@ -43,6 +43,8 @@ export interface AppMeta {
   siteContacts?: boolean;
   sla: { defaults: SlaTargets; companies: Record<string, CompanySla> };
   autoCloseDays: number;
+  // Minutes after sending that a chat message can be edited, and deleted for everyone.
+  chat?: { editMinutes: number; deleteMinutes: number };
   replyByEmail: boolean;
   sessionIdleMinutes: number;
   mailbox: string | null;
@@ -281,6 +283,27 @@ export interface ConversationImage {
   user_id?: number | null;
 }
 
+// Chat message extras (group and admin chats): the message a reply answers, reactions and pins.
+export interface ReplyPreview {
+  id: number;
+  user_id: number | null;
+  user_name: string | null;
+  body: string;
+  deleted: boolean;
+}
+export interface Reaction {
+  emoji: string;
+  user_ids: number[];
+  names: string[];
+}
+export interface PinnedMessage {
+  id: number;
+  user_name: string | null;
+  body: string;
+  pinned_by_name: string | null;
+  pinned_at: string;
+}
+
 export interface ChatItem {
   // 'team': admin-only chats.
   type: 'group' | 'ticket' | 'team';
@@ -332,6 +355,11 @@ export interface ChatMessage {
   created_at: string;
   edited_at: string | null;
   attachments: Attachment[];
+  reply_to?: ReplyPreview | null;
+  reactions?: Reaction[];
+  pinned?: boolean;
+  forwarded?: boolean;
+  deleted?: boolean;
 }
 
 export interface StaffMember {

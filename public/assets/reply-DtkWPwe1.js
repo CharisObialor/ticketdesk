@@ -1,0 +1,1 @@
+import{U as e}from"./utils-CwcA6yDy.js";var t={name:`forward`,size:24,node:[[`path`,{d:`m15 17 5-5-5-5`,key:`nf172w`}],[`path`,{d:`M4 18v-2a4 4 0 0 1 4-4h12`,key:`jmiej9`}]]};t.node;var n=e(t),r={name:`reply`,size:24,node:[[`path`,{d:`M20 18v-2a4 4 0 0 0-4-4H4`,key:`5vmcpk`}],[`path`,{d:`m9 17-5-5 5-5`,key:`nvlc11`}]]};r.node;var i=e(r);export{n,i as t};

@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCheck, Loader2, LogOut, Pencil, Send, ShieldCheck, UserPlus } from 'lucide-react';
+import { ArrowLeft, CheckCheck, Loader2, LogOut, Send, ShieldCheck, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MentionText, MentionTextarea, type MentionPerson } from '@/components/mention-textarea';
-import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { MessageBody, PinnedBar, ReplyBar } from '@/components/chat-actions';
 import { Marker, MarkerContent } from '@/components/ui/marker';
 import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import {
@@ -26,7 +26,7 @@ import { useSession } from '@/hooks/use-session';
 import { api, apiHref, errorMessage } from '@/lib/api';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
 import { ConversationPicture } from '@/components/conversation-image';
-import type { Attachment } from '@/lib/types';
+import type { Attachment, PinnedMessage, Reaction, ReplyPreview } from '@/lib/types';
 import { formatDateTime, formatTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { Attachments, EditBox } from '@/pages/ticket-detail';
@@ -42,11 +42,17 @@ export interface TeamMessage {
   user_name: string | null;
   user_avatar_url: string | null;
   attachments: Attachment[];
+  reply_to?: ReplyPreview | null;
+  reactions?: Reaction[];
+  pinned?: boolean;
+  forwarded?: boolean;
+  deleted?: boolean;
 }
 export interface TeamChatData {
   chat: { id: number; name: string; is_direct: boolean; created_by: number | null };
   members: { id: number; name: string; job_title: string | null; avatar_url: string | null; last_read_id: number }[];
   messages: TeamMessage[];
+  pins?: PinnedMessage[];
 }
 interface AdminOption {
   id: number;
@@ -60,6 +66,7 @@ export function TeamPane({ chatId }: { chatId: number }) {
   const qc = useQueryClient();
   const { user } = useSession();
   const [adding, setAdding] = useState(false);
+  const [replyTo, setReplyTo] = useState<TeamMessage | null>(null);
   const query = useQuery({ queryKey: ['team', chatId], queryFn: () => api.get<TeamChatData>(`/team/chats/${chatId}`), retry: false });
   const messages = query.data?.messages ?? [];
 
@@ -137,6 +144,7 @@ export function TeamPane({ chatId }: { chatId: number }) {
           </div>
         )}
       </div>
+      <PinnedBar pins={query.data.pins} scope="team" conversationId={chatId} />
       <MessageScrollerProvider key={chatId} autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           <MessageScrollerViewport>
@@ -152,6 +160,10 @@ export function TeamPane({ chatId }: { chatId: number }) {
                     chatId={chatId}
                     names={names}
                     me={user?.name}
+                    onReply={() => {
+                      setReplyTo(m);
+                      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('[data-composer] textarea')?.focus());
+                    }}
                   />
                 </MessageScrollerItem>
               ))}
@@ -160,7 +172,7 @@ export function TeamPane({ chatId }: { chatId: number }) {
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <TeamComposer chatId={chatId} people={people} />
+      <TeamComposer chatId={chatId} people={people} replyTo={replyTo} onCancelReply={() => setReplyTo(null)} />
       {adding && <AddAdminsDialog chatId={chatId} memberIds={members.map((m) => m.id)} onClose={() => setAdding(false)} />}
     </>
   );
@@ -177,6 +189,7 @@ function TeamBubble({
   chatId,
   names,
   me,
+  onReply,
 }: {
   message: TeamMessage;
   prev?: TeamMessage;
@@ -185,6 +198,7 @@ function TeamBubble({
   chatId: number;
   names: string[];
   me?: string;
+  onReply: () => void;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -209,14 +223,12 @@ function TeamBubble({
     }
   }
   const grouped = sameBlock(prev, m);
-  // A message that is only files has no text bubble.
-  const fileOnly = m.body === '(attachment)' && m.attachments.length > 0;
   return (
-    <UiMessage align={own ? 'end' : 'start'} className={cn(!grouped && 'pt-3')}>
+    <UiMessage id={`msg-team-${m.id}`} align={own ? 'end' : 'start'} className={cn('rounded-lg', !grouped && 'pt-3')}>
       <MessageAvatar className={cn('self-start', (grouped || own) && 'invisible')}>
         {!grouped && !own && <UserAvatar name={m.user_name} userId={m.user_id} src={m.user_avatar_url} />}
       </MessageAvatar>
-      <MessageContent className="max-w-[75%] gap-1">
+      <MessageContent className="group/bubble max-w-[75%] gap-1">
         {!grouped && (
           <MessageHeader className={cn('gap-2 px-0 font-normal text-foreground', own && 'flex-row-reverse')}>
             <span className="font-medium">{own ? 'You' : (m.user_name ?? 'Former admin')}</span>
@@ -225,32 +237,22 @@ function TeamBubble({
             </span>
           </MessageHeader>
         )}
-        {editing ? (
-          <div className="w-72 max-w-full">
-            <EditBox initial={m.body} busy={busy} onCancel={() => setEditing(false)} onSave={save} />
-          </div>
-        ) : fileOnly ? null : (
-          <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
-            <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>
-                <MentionText text={m.body} names={names} me={own ? null : me} />
-              </BubbleContent>
-            </Bubble>
-            {own && (
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover/bubble:opacity-100 focus-visible:opacity-100"
-                onClick={() => setEditing(true)}
-                aria-label="Edit message"
-              >
-                <Pencil />
-              </Button>
-            )}
-          </div>
-        )}
-        {m.edited_at && !editing && <span className={cn('text-[10px] text-muted-foreground italic', own && 'self-end')}>edited</span>}
-        {m.attachments.length > 0 && <Attachments items={m.attachments} base={apiHref('/api/team/files')} align={own ? 'end' : 'start'} />}
+        <MessageBody
+          message={m}
+          own={own}
+          scope="team"
+          conversationId={chatId}
+          editing={editing}
+          editor={
+            <div className="w-72 max-w-full">
+              <EditBox initial={m.body} busy={busy} onCancel={() => setEditing(false)} onSave={save} />
+            </div>
+          }
+          text={<MentionText text={m.body} names={names} me={own ? null : me} />}
+          attachments={<Attachments items={m.attachments} base={apiHref('/api/team/files')} align={own ? 'end' : 'start'} />}
+          onReply={onReply}
+          onEdit={() => setEditing(true)}
+        />
         {seenBy && seenBy.length > 0 && (
           <MessageFooter className="gap-1 px-0 text-[11px] font-normal">
             <CheckCheck className="size-3.5 text-primary" />
@@ -262,8 +264,19 @@ function TeamBubble({
   );
 }
 
-function TeamComposer({ chatId, people }: { chatId: number; people: MentionPerson[] }) {
+function TeamComposer({
+  chatId,
+  people,
+  replyTo,
+  onCancelReply,
+}: {
+  chatId: number;
+  people: MentionPerson[];
+  replyTo: TeamMessage | null;
+  onCancelReply: () => void;
+}) {
   const qc = useQueryClient();
+  const { user } = useSession();
   const files = useFileList({ kind: 'message' });
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
@@ -273,6 +286,7 @@ function TeamComposer({ chatId, people }: { chatId: number; people: MentionPerso
     setBusy(true);
     const fd = new FormData();
     fd.set('body', text);
+    if (replyTo) fd.set('reply_to_id', String(replyTo.id));
     for (const f of files.files) fd.append('files', f);
     try {
       const { message } = await api.post<{ message: TeamMessage }>(`/team/chats/${chatId}/messages`, fd);
@@ -280,6 +294,7 @@ function TeamComposer({ chatId, people }: { chatId: number; people: MentionPerso
       qc.invalidateQueries({ queryKey: ['chats'] });
       setBody('');
       files.clear();
+      onCancelReply();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -290,10 +305,14 @@ function TeamComposer({ chatId, people }: { chatId: number; people: MentionPerso
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
+    } else if (e.key === 'Escape' && replyTo) {
+      e.preventDefault();
+      onCancelReply();
     }
   };
   return (
-    <div className="space-y-2 border-t p-3">
+    <div data-composer className="space-y-2 border-t p-3">
+      {replyTo && <ReplyBar message={replyTo} meId={user?.id} onCancel={onCancelReply} />}
       <FileChips list={files} />
       <div className="flex items-end gap-2">
         <AttachButton list={files} />

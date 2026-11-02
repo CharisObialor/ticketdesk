@@ -5,6 +5,8 @@ const notify = require('../notify');
 const realtime = require('../realtime');
 const privacy = require('../privacy');
 const mentions = require('../mentions');
+const extras = require('../chat-extras');
+const config = require('../config');
 const ticketsSvc = require('../services/tickets');
 const { messageUpload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
@@ -77,14 +79,16 @@ async function hasAdmin(userIds) {
   return Number(row.n) > 0;
 }
 
-async function addMessage(group, user, { body, kind = 'message', files = [] }) {
+async function addMessage(group, user, { body, kind = 'message', files = [], replyToId = null, forwarded = false }) {
   const ts = now();
-  const r = await db.query('INSERT INTO chat_messages (group_id, user_id, body, kind, created_at) VALUES (?, ?, ?, ?, ?)', [
+  const r = await db.query('INSERT INTO chat_messages (group_id, user_id, body, kind, created_at, reply_to_id, forwarded) VALUES (?, ?, ?, ?, ?, ?, ?)', [
     group.id,
     user ? user.id : null,
     body,
     kind,
     ts,
+    replyToId,
+    forwarded ? 1 : 0,
   ]);
   const attachments = [];
   for (const f of files) {
@@ -106,10 +110,34 @@ async function addMessage(group, user, { body, kind = 'message', files = [] }) {
     body,
     kind,
     created_at: ts,
+    edited_at: null,
+    reply_to_id: replyToId,
+    forwarded,
+    deleted_at: null,
     attachments,
   };
+  await extras.decorate('group', [message]);
   realtime.toUsers(await memberIds(group.id), 'chat:message', { groupId: group.id, message }, { admins: true });
   return message;
+}
+
+// One group message as the chat shows it (files, reply preview, reactions, pinned).
+async function loadGroupMessage(id) {
+  const message = await db.one('SELECT m.*, u.name AS user_name, u.role AS user_role FROM chat_messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.id = ?', [id]);
+  if (!message) return null;
+  message.attachments = await db.query('SELECT id, message_id, original_name, mime, size, created_at FROM chat_attachments WHERE message_id = ?', [id]);
+  return (await extras.decorate('group', [message]))[0];
+}
+const announceUpdate = async (groupId, message) => realtime.toUsers(await memberIds(groupId), 'chat:updated', { groupId, message }, { admins: true });
+
+// The message being replied to, which must be in the same group.
+async function replyTarget(groupId, value) {
+  const id = Number(value) || 0;
+  if (!id) return null;
+  if (!(await db.one("SELECT id FROM chat_messages WHERE id = ? AND group_id = ? AND kind = 'message'", [id, groupId]))) {
+    throw new HttpError(400, 'The message you are replying to is no longer in this conversation');
+  }
+  return id;
 }
 
 // Bell (and email) for the members a message tags with @. On an edit (`before` given), only the people newly tagged.
@@ -118,6 +146,14 @@ async function notifyMentions(group, actor, body, before = null) {
   const tagged = before === null ? mentions.mentioned(body, people) : mentions.newlyMentioned(before, body, people, actor.id);
   const ids = tagged.map((p) => Number(p.id)).filter((id) => id !== actor.id);
   if (ids.length) await notify.mentioned(actor, ids, { place: `the group "${group.name}"`, link: `/messages/group/${group.id}`, body });
+}
+
+// An admin overseeing a group joins it when they first post.
+async function joinToPost(group, members, u) {
+  if (members.includes(u.id)) return;
+  await db.query('INSERT INTO chat_members (group_id, user_id, added_by, joined_at, last_read_id) VALUES (?, ?, ?, ?, ?)', [group.id, u.id, u.id, now(), await latestMessageId(group.id)]);
+  await systemMessage(group, u, `${u.name} joined the group.`);
+  await groupChanged(group.id);
 }
 
 const systemMessage = (group, actor, text) => addMessage(group, actor, { body: text, kind: 'system' });
@@ -232,7 +268,7 @@ router.get(
        JOIN companies c ON c.id = g.company_id
        LEFT JOIN users u ON u.id = cm.user_id
        ${isAdmin(u) ? '' : 'JOIN chat_members mem ON mem.group_id = g.id AND mem.user_id = ?'}
-       WHERE cm.kind = 'message' AND cm.body LIKE ?
+       WHERE cm.kind = 'message' AND cm.deleted_at IS NULL AND cm.body LIKE ?
        ORDER BY cm.id DESC LIMIT 25`,
       [...(isAdmin(u) ? [] : [u.id]), like]
     );
@@ -315,11 +351,12 @@ router.get(
   wrap(async (req, res) => {
     const { group, members } = await loadGroup(req);
     const isMember = members.includes(req.user.id);
+    const hidden = extras.notHidden('group', req.user.id);
     const messages = (
       await db.query(
         `SELECT m.*, u.name AS user_name, u.role AS user_role FROM chat_messages m LEFT JOIN users u ON u.id = m.user_id
-         WHERE m.group_id = ? ORDER BY m.id DESC LIMIT ?`,
-        [group.id, MESSAGE_LIMIT]
+         WHERE m.group_id = ? ${hidden.sql} ORDER BY m.id DESC LIMIT ?`,
+        [group.id, ...hidden.params, MESSAGE_LIMIT]
       )
     ).reverse();
     const atts = messages.length
@@ -328,12 +365,14 @@ router.get(
           messages[0].id,
         ])
       : [];
-    for (const m of messages) m.attachments = atts.filter((a) => a.message_id === m.id);
+    for (const m of messages) m.attachments = atts.filter((a) => Number(a.message_id) === Number(m.id));
+    await extras.decorate('group', messages);
     if (isMember) await markGroupRead(group.id, req.user.id);
     res.json({
       group: { ...group, is_member: isMember, can_manage: isAdmin(req.user) || Number(group.created_by) === req.user.id },
       members: await getMembers(group.id),
       messages,
+      pins: await extras.pinsFor('group', group.id),
     });
   })
 );
@@ -355,13 +394,9 @@ router.post(
     const { group, members } = await loadGroup(req);
     const body = clean(req.body.body, 20000);
     if (!body && !req.files.length) throw new HttpError(400, 'Write a message or attach a file');
-    // An admin overseeing a group joins it when they first post.
-    if (!members.includes(u.id)) {
-      await db.query('INSERT INTO chat_members (group_id, user_id, added_by, joined_at, last_read_id) VALUES (?, ?, ?, ?, ?)', [group.id, u.id, u.id, now(), await latestMessageId(group.id)]);
-      await systemMessage(group, u, `${u.name} joined the group.`);
-      await groupChanged(group.id);
-    }
-    const message = await addMessage(group, u, { body: body || '(attachment)', files: req.files });
+    const replyToId = await replyTarget(group.id, req.body.reply_to_id);
+    await joinToPost(group, members, u);
+    const message = await addMessage(group, u, { body: body || '(attachment)', files: req.files, replyToId });
     res.status(201).json({ message });
     notifyMentions(group, u, body).catch((err) => console.error('[mentions]', err.message));
   })
@@ -375,6 +410,7 @@ router.patch(
     const m = await db.one('SELECT * FROM chat_messages WHERE id = ? AND group_id = ?', [Number(req.params.messageId), group.id]);
     if (!m || m.kind !== 'message') throw new HttpError(404, 'Message not found');
     if (Number(m.user_id) !== req.user.id) throw new HttpError(403, 'You can only edit your own messages');
+    if (!extras.canEdit(m)) throw new HttpError(400, `Messages can only be edited within ${config.chat.editMinutes} minutes of sending`);
     const body = clean(req.body.body, 20000);
     if (!body) throw new HttpError(400, 'A message cannot be empty');
     await db.query('UPDATE chat_messages SET body = ?, edited_at = ? WHERE id = ?', [body, now(), m.id]);
@@ -382,12 +418,8 @@ router.patch(
     notifyMentions(group, req.user, body, m.body).catch((err) =>
       console.error('[mentions]', err.message)
     );
-    const message = await db.one(
-      'SELECT m.*, u.name AS user_name, u.role AS user_role FROM chat_messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.id = ?',
-      [m.id]
-    );
-    message.attachments = await db.query('SELECT id, message_id, original_name, mime, size, created_at FROM chat_attachments WHERE message_id = ?', [m.id]);
-    realtime.toUsers(await memberIds(group.id), 'chat:updated', { groupId: group.id, message }, { admins: true });
+    const message = await loadGroupMessage(m.id);
+    await announceUpdate(group.id, message);
     res.json({ message });
   })
 );
@@ -474,3 +506,13 @@ router.post(
 );
 
 module.exports = router;
+// For message actions (reactions, pins, deleting, forwarding) shared with admin chats.
+module.exports.groupChat = {
+  access: (groupId, user) => loadGroup({ params: { id: groupId }, user }),
+  loadMessage: loadGroupMessage,
+  announceUpdate,
+  async postForwarded(group, members, user, { body, files }) {
+    await joinToPost(group, members, user);
+    return addMessage(group, user, { body, files, forwarded: true });
+  },
+};

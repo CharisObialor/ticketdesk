@@ -115,6 +115,8 @@ module.exports = {
   timezone: env.APP_TIMEZONE || 'Africa/Lagos',
   autoCloseDays: int(env.AUTO_CLOSE_DAYS, 7),
   chatDigestMinutes: int(env.CHAT_DIGEST_MINUTES, 15),
+  // How long after sending people can edit a chat message, and delete it for everyone (minutes).
+  chat: { editMinutes: int(env.CHAT_EDIT_MINUTES, 15), deleteMinutes: int(env.CHAT_DELETE_MINUTES, 60) },
   backup: { hour: int(env.BACKUP_HOUR, 2), keep: int(env.BACKUP_KEEP, 14) },
   storageDir: path.resolve(root, env.STORAGE_DIR || 'storage'),
   // Kept modest so uploads (and emails that carry them) stay light on the server.

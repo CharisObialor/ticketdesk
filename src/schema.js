@@ -338,6 +338,35 @@ CREATE TABLE IF NOT EXISTS team_attachments (
   CONSTRAINT fk_ta_message FOREIGN KEY (message_id) REFERENCES team_messages(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  scope VARCHAR(10) NOT NULL,
+  message_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  emoji VARCHAR(16) NOT NULL,
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY (scope, message_id, user_id),
+  CONSTRAINT fk_cr_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS chat_hidden (
+  scope VARCHAR(10) NOT NULL,
+  message_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  hidden_at DATETIME NOT NULL,
+  PRIMARY KEY (scope, user_id, message_id),
+  CONSTRAINT fk_ch_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS chat_pins (
+  scope VARCHAR(10) NOT NULL,
+  conversation_id INT UNSIGNED NOT NULL,
+  message_id INT UNSIGNED NOT NULL,
+  pinned_by INT UNSIGNED NULL,
+  pinned_at DATETIME NOT NULL,
+  PRIMARY KEY (scope, message_id),
+  KEY idx_cp_conv (scope, conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id INT UNSIGNED NOT NULL,
@@ -522,6 +551,19 @@ CREATE TABLE IF NOT EXISTS team_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_ta_chat ON team_attachments(chat_id);
 CREATE INDEX IF NOT EXISTS idx_ta_message ON team_attachments(message_id);
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  scope TEXT NOT NULL, message_id INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (scope, message_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS chat_hidden (
+  scope TEXT NOT NULL, message_id INTEGER NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hidden_at TEXT NOT NULL, PRIMARY KEY (scope, user_id, message_id)
+);
+CREATE TABLE IF NOT EXISTS chat_pins (
+  scope TEXT NOT NULL, conversation_id INTEGER NOT NULL, message_id INTEGER NOT NULL, pinned_by INTEGER,
+  pinned_at TEXT NOT NULL, PRIMARY KEY (scope, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cp_conv ON chat_pins(scope, conversation_id);
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT
@@ -601,6 +643,13 @@ const columns = [
   ['companies', 'statement_sent_for', 'VARCHAR(7) NULL', 'TEXT'],
   // How often an admin wants SLA reminders (JSON, see sla.reminderPrefs).
   ['users', 'sla_reminders', 'TEXT NULL', 'TEXT'],
+  // Group and admin chat messages: the message it replies to, forwarded from another chat, deleted for everyone.
+  ['chat_messages', 'reply_to_id', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['chat_messages', 'forwarded', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['chat_messages', 'deleted_at', 'DATETIME NULL', 'TEXT'],
+  ['team_messages', 'reply_to_id', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['team_messages', 'forwarded', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['team_messages', 'deleted_at', 'DATETIME NULL', 'TEXT'],
 ];
 
 // Indexes added after the first release, created once on startup if missing: [table, index name, columns].

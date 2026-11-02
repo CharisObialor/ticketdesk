@@ -34,7 +34,7 @@ async function autoClose() {
 // Each message is included in at most one summary.
 async function chatDigest() {
   if (config.chatDigestMinutes <= 0) return;
-  const unread = `FROM chat_messages cm WHERE cm.group_id = m.group_id AND cm.kind = 'message' AND cm.user_id <> m.user_id
+  const unread = `FROM chat_messages cm WHERE cm.group_id = m.group_id AND cm.kind = 'message' AND cm.deleted_at IS NULL AND cm.user_id <> m.user_id
     AND cm.id > m.last_read_id AND cm.id > m.last_emailed_id`;
   const rows = await db.query(
     `SELECT m.group_id, m.user_id, g.name AS group_name, c.name AS company_name, u.name AS user_name, u.email, u.notify_prefs,
@@ -54,7 +54,7 @@ async function chatDigest() {
     if (!byUser.has(r.user_id)) byUser.set(r.user_id, { user: { id: r.user_id, name: r.user_name, email: r.email, notify_prefs: r.notify_prefs }, groups: [] });
     const messages = await db.query(
       `SELECT cm.body, u.name AS user_name FROM chat_messages cm LEFT JOIN users u ON u.id = cm.user_id
-       WHERE cm.group_id = ? AND cm.kind = 'message' AND cm.user_id <> ? AND cm.id <= ? ORDER BY cm.id DESC LIMIT 3`,
+       WHERE cm.group_id = ? AND cm.kind = 'message' AND cm.deleted_at IS NULL AND cm.user_id <> ? AND cm.id <= ? ORDER BY cm.id DESC LIMIT 3`,
       [r.group_id, r.user_id, r.max_id]
     );
     byUser.get(r.user_id).groups.push({ id: r.group_id, name: r.group_name, company_name: r.company_name, count: Number(r.cnt), messages: messages.reverse() });

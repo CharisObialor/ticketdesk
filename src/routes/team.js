@@ -7,6 +7,8 @@ const { messageUpload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const realtime = require('../realtime');
 const notify = require('../notify');
 const mentions = require('../mentions');
+const extras = require('../chat-extras');
+const config = require('../config');
 const { requireAdmin } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
 
@@ -41,16 +43,47 @@ async function validAdmins(ids, exceptId) {
   return found;
 }
 
-const messageSelect = `SELECT m.id, m.chat_id, m.user_id, m.body, m.kind, m.created_at, m.edited_at, u.name AS user_name, u.avatar AS user_avatar
+const messageSelect = `SELECT m.id, m.chat_id, m.user_id, m.body, m.kind, m.created_at, m.edited_at, m.reply_to_id, m.forwarded, m.deleted_at,
+  u.name AS user_name, u.avatar AS user_avatar
   FROM team_messages m LEFT JOIN users u ON u.id = m.user_id`;
 const shape = (m) => ({ ...m, user_avatar_url: avatarUrl(m.user_avatar), user_avatar: undefined, attachments: m.attachments || [] });
 const ATTACHMENT_COLS = 'id, message_id, original_name, mime, size, created_at';
+// Files, reply preview, reactions and pinned flag for each message.
 async function withAttachments(messages) {
   if (!messages.length) return messages;
   const ids = messages.map((m) => m.id);
   const atts = await db.query(`SELECT ${ATTACHMENT_COLS} FROM team_attachments WHERE message_id IN (${db.inList(ids)})`, ids);
   for (const m of messages) m.attachments = atts.filter((a) => Number(a.message_id) === Number(m.id));
-  return messages;
+  return extras.decorate('team', messages);
+}
+
+async function loadTeamMessage(id) {
+  const row = await db.one(`${messageSelect} WHERE m.id = ?`, [id]);
+  return row ? (await withAttachments([row])).map(shape)[0] : null;
+}
+
+// Saves a message (with files) to an admin chat and sends it to the members.
+async function postMessage(chat, members, user, { body, files = [], replyToId = null, forwarded = false }) {
+  const ts = now();
+  const r = await db.query("INSERT INTO team_messages (chat_id, user_id, body, kind, created_at, reply_to_id, forwarded) VALUES (?, ?, ?, 'message', ?, ?, ?)", [
+    chat.id,
+    user.id,
+    body,
+    ts,
+    replyToId,
+    forwarded ? 1 : 0,
+  ]);
+  for (const f of files) {
+    await db.query(
+      'INSERT INTO team_attachments (chat_id, message_id, user_id, original_name, stored_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [chat.id, r.insertId, user.id, f.originalname, f.filename, f.mimetype, f.size, ts]
+    );
+  }
+  await db.query('UPDATE team_chats SET last_message_at = ? WHERE id = ?', [ts, chat.id]);
+  await db.query('UPDATE team_chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?', [r.insertId, chat.id, user.id]);
+  const message = await loadTeamMessage(r.insertId);
+  realtime.toUsers(members, 'team:message', { chatId: chat.id, message });
+  return message;
 }
 
 // Bell (and email) for the admins a message tags with @. On an edit (`before` given), only the people newly tagged.
@@ -112,12 +145,16 @@ router.get(
       `SELECT m.user_id AS id, u.name, u.avatar, u.job_title, m.last_read_id FROM team_chat_members m JOIN users u ON u.id = m.user_id WHERE m.chat_id = ? ORDER BY u.name`,
       [chat.id]
     );
-    const messages = await withAttachments(await db.query(`SELECT * FROM (${messageSelect} WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT ${MESSAGE_LIMIT}) x ORDER BY id`, [chat.id]));
+    const hidden = extras.notHidden('team', req.user.id);
+    const messages = await withAttachments(
+      await db.query(`SELECT * FROM (${messageSelect} WHERE m.chat_id = ? ${hidden.sql} ORDER BY m.id DESC LIMIT ${MESSAGE_LIMIT}) x ORDER BY id`, [chat.id, ...hidden.params])
+    );
     const other = chat.is_direct ? members.find((m) => Number(m.id) !== req.user.id) : null;
     res.json({
       chat: { id: chat.id, name: chat.is_direct ? (other ? other.name : 'Direct message') : chat.name, is_direct: !!Number(chat.is_direct), created_by: chat.created_by },
       members: members.map((m) => ({ id: Number(m.id), name: m.name, job_title: m.job_title, avatar_url: avatarUrl(m.avatar), last_read_id: Number(m.last_read_id) })),
       messages: messages.map(shape),
+      pins: await extras.pinsFor('team', chat.id),
     });
   })
 );
@@ -132,23 +169,11 @@ router.post(
       const { chat, members } = await loadChat(req);
       const body = clean(req.body.body, 10000);
       if (!body && !files.length) throw new HttpError(400, 'Write a message or attach a file');
-      const ts = now();
-      const r = await db.query("INSERT INTO team_messages (chat_id, user_id, body, kind, created_at) VALUES (?, ?, ?, 'message', ?)", [
-        chat.id,
-        req.user.id,
-        body || '(attachment)',
-        ts,
-      ]);
-      for (const f of files) {
-        await db.query(
-          'INSERT INTO team_attachments (chat_id, message_id, user_id, original_name, stored_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [chat.id, r.insertId, req.user.id, f.originalname, f.filename, f.mimetype, f.size, ts]
-        );
+      const replyToId = Number(req.body.reply_to_id) || null;
+      if (replyToId && !(await db.one("SELECT id FROM team_messages WHERE id = ? AND chat_id = ? AND kind = 'message'", [replyToId, chat.id]))) {
+        throw new HttpError(400, 'The message you are replying to is no longer in this conversation');
       }
-      await db.query('UPDATE team_chats SET last_message_at = ? WHERE id = ?', [ts, chat.id]);
-      await db.query('UPDATE team_chat_members SET last_read_id = ? WHERE chat_id = ? AND user_id = ?', [r.insertId, chat.id, req.user.id]);
-      const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [r.insertId])])).map(shape);
-      realtime.toUsers(members, 'team:message', { chatId: chat.id, message });
+      const message = await postMessage(chat, members, req.user, { body: body || '(attachment)', files, replyToId });
       res.status(201).json({ message });
       notifyMentions(chat, req.user, body).catch((err) => console.error('[mentions]', err.message));
     } catch (err) {
@@ -182,13 +207,14 @@ router.patch(
     const m = await db.one("SELECT * FROM team_messages WHERE id = ? AND chat_id = ? AND kind = 'message'", [Number(req.params.messageId), chat.id]);
     if (!m) throw new HttpError(404, 'Message not found');
     if (Number(m.user_id) !== req.user.id) throw new HttpError(403, 'You can only edit your own messages');
+    if (!extras.canEdit(m)) throw new HttpError(400, `Messages can only be edited within ${config.chat.editMinutes} minutes of sending`);
     const body = clean(req.body.body, 10000);
     if (!body) throw new HttpError(400, 'A message cannot be empty');
     await db.query('UPDATE team_messages SET body = ?, edited_at = ? WHERE id = ?', [body, now(), m.id]);
     notifyMentions(chat, req.user, body, m.body).catch((err) =>
       console.error('[mentions]', err.message)
     );
-    const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [m.id])])).map(shape);
+    const message = await loadTeamMessage(m.id);
     realtime.toUsers(members, 'team:updated', { chatId: chat.id, message });
     res.json({ message });
   })
@@ -268,3 +294,13 @@ async function inboxItems(user) {
 
 module.exports = router;
 module.exports.inboxItems = inboxItems;
+// For message actions (reactions, pins, deleting, forwarding) shared with group chats. Admins only.
+module.exports.teamChat = {
+  async access(chatId, user) {
+    if (user.role !== 'admin') throw new HttpError(404, 'Conversation not found');
+    return loadChat({ params: { id: chatId }, user });
+  },
+  loadMessage: loadTeamMessage,
+  announceUpdate: async (chatId, message) => realtime.toUsers(await memberIds(chatId), 'team:updated', { chatId, message }),
+  postForwarded: (chat, members, user, { body, files }) => postMessage(chat, members, user, { body, files, forwarded: true }),
+};
