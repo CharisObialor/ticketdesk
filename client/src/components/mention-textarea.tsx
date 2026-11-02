@@ -40,6 +40,7 @@ export function MentionTextarea({
   ...rest
 }: Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange'> & { people: MentionPerson[]; value: string; onValueChange: (value: string) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
   const [typed, setTyped] = useState<{ start: number; text: string } | null>(null);
   const [active, setActive] = useState(0);
   const options = useMemo(() => (typed ? matches(people, typed.text) : []), [people, typed]);
@@ -108,15 +109,32 @@ export function MentionTextarea({
           ))}
         </div>
       )}
+      {/* The same text drawn behind the box with tags in blue. The box's own text is transparent (the caret is not),
+          so both layers must keep identical font, padding, border and wrapping. */}
+      <div
+        ref={backdrop}
+        aria-hidden
+        className={cn(
+          'pointer-events-none absolute inset-0 overflow-hidden rounded-md border border-transparent px-3 py-2 text-base break-words whitespace-pre-wrap text-foreground md:text-sm dark:bg-input/30',
+          rest.className
+        )}
+      >
+        {withMentions(value, people.map((p) => p.name), () => 'rounded-sm bg-blue-100 text-blue-700 dark:bg-blue-500/25 dark:text-blue-300')}
+        {value.endsWith('\n') ? ' ' : null}
+      </div>
       <Textarea
         {...rest}
         ref={ref}
         value={value}
+        className={cn(rest.className, 'relative bg-transparent text-transparent caret-foreground [scrollbar-width:none] selection:bg-blue-200/60 dark:bg-transparent')}
         aria-autocomplete="list"
         aria-expanded={open}
         onChange={(e) => {
           onValueChange(e.target.value);
           track(e.target);
+        }}
+        onScroll={(e) => {
+          if (backdrop.current) backdrop.current.scrollTop = e.currentTarget.scrollTop;
         }}
         onSelect={(e) => track(e.currentTarget)}
         onBlur={(e) => {
@@ -129,24 +147,29 @@ export function MentionTextarea({
   );
 }
 
-// A message with "@Full Name" tags in bold; tags of the signed-in person are highlighted.
-export function MentionText({ text, names, me }: { text: string; names: string[]; me?: string | null }) {
+// Text with each "@Full Name" tag (for the names given) wrapped in a span styled by `style(name)`.
+function withMentions(text: string, names: string[], style: (name: string) => string) {
   const list = [...new Set(names.map((n) => n.trim()).filter(Boolean))].sort((a, b) => b.length - a.length);
-  if (!list.length || !text.includes('@')) return <>{text}</>;
+  if (!list.length || !text.includes('@')) return text;
   const re = new RegExp(`(^|[^\\w@])@(${list.map(escape).join('|')})(?!\\w)`, 'gi');
   const out: ReactNode[] = [];
   let last = 0;
   for (const m of text.matchAll(re)) {
     const at = (m.index ?? 0) + m[1].length;
     out.push(text.slice(last, at));
-    const mine = !!me && m[2].toLowerCase() === me.trim().toLowerCase();
     out.push(
-      <span key={at} className={cn('font-semibold', mine && 'rounded-sm bg-primary/15 px-0.5 text-primary')}>
+      <span key={at} className={style(m[2])}>
         @{m[2]}
       </span>
     );
     last = at + m[2].length + 1;
   }
   out.push(text.slice(last));
-  return <>{out}</>;
+  return out;
+}
+
+// A message with "@Full Name" tags in bold; tags of the signed-in person are highlighted.
+export function MentionText({ text, names, me }: { text: string; names: string[]; me?: string | null }) {
+  const mine = (name: string) => !!me && name.toLowerCase() === me.trim().toLowerCase();
+  return <>{withMentions(text, names, (name) => cn('font-semibold', mine(name) && 'rounded-sm bg-primary/15 px-0.5 text-primary'))}</>;
 }
