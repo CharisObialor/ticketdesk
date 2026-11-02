@@ -59,13 +59,28 @@ function sendAsMailbox(sender) {
   return email;
 }
 
-// One delivery attempt. If Microsoft refuses to send as the staff member, it goes from the support mailbox instead.
-async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId, replyTo, sender, unsubscribeUrl }) {
-  let mailbox = sendAsMailbox(sender);
+// The system mailbox (systems@) for automatic emails, used through the delegate's Full Access to it in Exchange.
+async function systemMailbox() {
+  const box = config.graph.systemMailbox;
+  if (!box || !useGraph() || (sendAsBlocked.get(box) || 0) > Date.now()) return null;
+  const shared = await require('./exchange')
+    .sharedFor(config.graph.systemDelegate)
+    .catch(() => []);
+  const found = shared.find((s) => s.address === box);
+  if (!found) return null;
+  return { address: box, name: found.name && !found.name.includes('@') ? found.name : config.appName };
+}
+
+// One delivery attempt. If Microsoft refuses to send as the staff member (or the system mailbox), it goes from the
+// support mailbox instead.
+async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId, replyTo, sender, system, unsubscribeUrl }) {
+  const own = system ? null : sendAsMailbox(sender);
+  let via = system ? await systemMailbox() : own ? { address: own, name: `${sender.name} (${config.appName})` } : null;
   for (;;) {
+    const mailbox = via ? via.address : null;
     try {
       await getTransport().sendMail({
-        from: mailbox ? { name: `${sender.name} (${config.appName})`, address: mailbox } : config.smtp.from,
+        from: via ? { name: via.name, address: via.address } : config.smtp.from,
         replyTo: replyTo || config.smtp.replyTo || undefined,
         to,
         cc: cc && cc.length ? cc : undefined,
@@ -88,7 +103,7 @@ async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId
       if (mailbox && (err.status === 403 || err.status === 404 || SEND_AS_REFUSED.test(err.code || ''))) {
         console.warn(`[mail] cannot send as ${mailbox} (${err.code || err.status}); using the support mailbox`);
         sendAsBlocked.set(mailbox, Date.now() + 3600e3);
-        mailbox = null;
+        via = null;
         continue;
       }
       throw err;
@@ -107,6 +122,7 @@ let draining = false;
 
 // Queues an email and returns at once, so a slow or unreachable mail server never delays the person's request.
 // `sender` ({ name, email }) is the staff member who triggered it; with Microsoft 365 it is sent from their mailbox.
+// `system: true` marks automatic emails, which go out from the system mailbox (see systemMailbox).
 function send(message) {
   if (!message || !message.to) return;
   // Time-critical account emails (one-time codes, reset links) go straight out instead of waiting behind a busy
@@ -228,4 +244,4 @@ async function retryFailed(ids) {
 // The email layout lives in email-template.js.
 const { render, REPLY_MARKER } = require('./email-template');
 
-module.exports = { send, deliver, processOutbox, outboxStatus, retryFailed, render, configured, REPLY_MARKER };
+module.exports = { send, deliver, processOutbox, outboxStatus, retryFailed, render, configured, systemMailbox, REPLY_MARKER };

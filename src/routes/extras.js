@@ -342,6 +342,10 @@ router.get(
         provider: config.mailProvider === 'graph' && config.graph.clientId ? 'microsoft365' : config.smtp.host ? 'smtp' : 'none',
         mailbox: config.mailProvider === 'graph' ? config.graph.mailbox || null : config.smtp.user || null,
         sendAsStaff: mailer.configured() && config.mailProvider === 'graph' && config.graph.sendAsStaff ? config.graph.senderDomains : null,
+        // Automatic emails: the system mailbox, and whether the delegate's access to it is confirmed right now.
+        system: config.graph.systemMailbox
+          ? { address: config.graph.systemMailbox, delegate: config.graph.systemDelegate, active: !!(await mailer.systemMailbox()) }
+          : null,
         inbound: { ...inbound.status, address: config.inbound.address || null },
       },
       outbox: await mailer.outboxStatus(),

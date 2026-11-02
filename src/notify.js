@@ -162,6 +162,8 @@ function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = f
       holdUntil: timing.holdUntil,
       awayUserId: timing.awayUserId,
       sender,
+      // Nobody triggered it (auto-close, a rule, a sign-off finishing): it comes from the system mailbox.
+      system: !actor || actor.role === 'system',
       replyTo: reply || undefined,
       unsubscribeUrl: unsubscribeUrl(r.id),
       ...mailer.render({ ...design, ...content, replyable: !!reply, unsubscribeUrl: unsubscribeUrl(r.id) }),
@@ -570,7 +572,7 @@ module.exports = {
       ctaUrl: groups.length === 1 ? `${config.appUrl}/messages/group/${groups[0].id}` : `${config.appUrl}/messages`,
       ctaLabel: 'Read messages',
     });
-    mailer.send({ to: user.email, unsubscribeUrl: unsubscribeUrl(user.id), subject: `${plural(total, 'unread message')} in ${groups.length === 1 ? `"${groups[0].name}"` : `${groups.length} conversations`}`, html, text });
+    mailer.send({ system: true, to: user.email, unsubscribeUrl: unsubscribeUrl(user.id), subject: `${plural(total, 'unread message')} in ${groups.length === 1 ? `"${groups[0].name}"` : `${groups.length} conversations`}`, html, text });
   },
 
   // Admin actions: urgent items as soon as they appear, and the weekday morning summary.
@@ -594,7 +596,7 @@ module.exports = {
     const subject = daily
       ? `${items.length} support action${items.length === 1 ? '' : 's'} waiting${urgent ? ` (${urgent} urgent)` : ''}`
       : `Urgent: ${items[0].title}`.slice(0, 200);
-    mailer.send({ to: user.email, subject, html, text, unsubscribeUrl: unsubscribeUrl(user.id) });
+    mailer.send({ system: true, to: user.email, subject, html, text, unsubscribeUrl: unsubscribeUrl(user.id) });
   },
 
   // Account emails are always sent, whatever the notification preference.
@@ -620,7 +622,7 @@ module.exports = {
       note: 'If you were not expecting this email, you can ignore it.',
       footer: 'account',
     });
-    mailer.send({ to: user.email, subject: `Your ${config.appName} account has been created`, html, text });
+    mailer.send({ system: true, to: user.email, subject: `Your ${config.appName} account has been created`, html, text });
   },
 
   passwordReset(user, token) {
@@ -634,7 +636,7 @@ module.exports = {
       note: 'If you did not request a password reset, you can ignore this email. Your password will not change.',
       footer: 'account',
     });
-    mailer.send({ to: user.email, subject: `Reset your ${config.appName} password`, html, text, urgent: true });
+    mailer.send({ system: true, to: user.email, subject: `Reset your ${config.appName} password`, html, text, urgent: true });
   },
 
   // Monthly statement for a client company: last month's figures, with a link to the Performance page.
@@ -667,7 +669,7 @@ module.exports = {
         note: 'You can save the full figures as a PDF from the Performance page. You receive this statement because your company asked for it; contact us to stop it.',
         footer: 'account',
       });
-      mailer.send({ to: p.email, subject: `${company.name} support statement, ${monthLabel}`, html, text });
+      mailer.send({ system: true, to: p.email, subject: `${company.name} support statement, ${monthLabel}`, html, text });
     }
   },
 
@@ -683,7 +685,7 @@ module.exports = {
       note: 'If you did not ask to change your password, ignore this email and your password stays the same. Never share this code with anyone, including our staff.',
       footer: 'account',
     });
-    mailer.send({ to: user.email, subject: `${code} is your ${config.appName} code`, html, text, urgent: true });
+    mailer.send({ system: true, to: user.email, subject: `${code} is your ${config.appName} code`, html, text, urgent: true });
   },
 
   passwordChanged(user) {
@@ -698,6 +700,6 @@ module.exports = {
       ctaLabel: 'Go to sign in',
       footer: 'account',
     });
-    mailer.send({ to: user.email, subject: `Your ${config.appName} password was changed`, html, text });
+    mailer.send({ system: true, to: user.email, subject: `Your ${config.appName} password was changed`, html, text });
   },
 };

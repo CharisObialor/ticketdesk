@@ -21,7 +21,7 @@ interface SystemInfo {
   lastBackup: { ok: boolean; reason: string; name?: string; error?: string; finished_at: string; filesCopied?: number } | null;
   backupHour: number;
   backupKeep: number;
-  email: { outgoing: boolean; provider: 'microsoft365' | 'smtp' | 'none'; mailbox: string | null; sendAsStaff: string[] | null; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
+  email: { outgoing: boolean; provider: 'microsoft365' | 'smtp' | 'none'; mailbox: string | null; sendAsStaff: string[] | null; system: { address: string; delegate: string; active: boolean } | null; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
   autoCloseDays: number;
   chatDigestMinutes: number;
   sessionIdleMinutes: number;
@@ -79,6 +79,13 @@ export default function SystemPage() {
                   s.email.sendAsStaff?.length
                     ? `Staff on ${s.email.sendAsStaff.join(', ')} send from their own mailbox`
                     : 'All email is sent from the support mailbox',
+                  ...(s.email.system
+                    ? [
+                        s.email.system.active
+                          ? `Reminders, SLA alerts and other automatic email come from ${s.email.system.address} (${s.email.system.delegate} has access)`
+                          : `Automatic email uses the support mailbox: ${s.email.system.delegate} has no Full Access to ${s.email.system.address} that Exchange confirms`,
+                      ]
+                    : []),
                 ]
               : s.email.provider === 'smtp'
                 ? [`Sending through SMTP${s.email.mailbox ? ` as ${s.email.mailbox}` : ''}`, 'Set with SMTP_* settings in .env']

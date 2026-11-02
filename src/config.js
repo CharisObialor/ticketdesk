@@ -70,6 +70,10 @@ module.exports = {
       .filter(Boolean),
     // Optional hand-written list of shared mailboxes and who may open them, used when Exchange cannot be asked.
     sharedMailboxes: env.MS_SHARED_MAILBOXES || '',
+    // Automatic emails (reminders, SLA alerts, digests, statements, account emails) go out from this shared mailbox,
+    // as long as the delegate has Full Access to it in Exchange. Otherwise they use the support mailbox.
+    systemMailbox: (env.MS_SYSTEM_MAILBOX || '').trim().toLowerCase(),
+    systemDelegate: (env.MS_SYSTEM_DELEGATE || env.OWNER_EMAIL || 'charis.obialor@dateheight.com').trim().toLowerCase(),
   },
   smtp: {
     host: env.SMTP_HOST,
