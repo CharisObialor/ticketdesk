@@ -82,6 +82,7 @@ const KIND_CATEGORY = {
   escalation_request: 'status',
   visit: 'visits',
   group: 'chats',
+  mention: 'chats',
   assigned: 'assignments',
   escalated: 'escalations',
   rating: 'ratings',
@@ -119,7 +120,7 @@ async function ticketWatchers(t) {
  * and an email when they have email notifications on. Ticket emails carry a personal reply-to address.
  */
 // Icon shown at the top of each kind of email.
-const KIND_ICON = { ticket_created: 'ticket', reply: 'reply', escalated: 'alert', assigned: 'ticket', rating: 'star', visit: 'calendar', group: 'group' };
+const KIND_ICON = { ticket_created: 'ticket', reply: 'reply', escalated: 'alert', assigned: 'ticket', rating: 'star', visit: 'calendar', group: 'group', mention: 'group' };
 const statusIcon = (status) => (['resolved', 'closed'].includes(status) ? 'check' : status === 'awaiting_client' ? 'clock' : 'ticket');
 
 function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = false, kind = 'ticket', link, email = true } = {}) {
@@ -256,10 +257,23 @@ module.exports = {
           .create(requester.id, { kind: 'reply', title: `${actor.name} replied on #${t.id}`, body: excerpt(message.body, 200), link: ticketPath(t.id) })
           .catch(() => {});
       }
+      // Files go along while they fit within the email attachment limit; any others are named instead.
+      let room = config.mailUpload.maxTotalMb * 1024 * 1024;
+      const attach = [];
+      const left = [];
+      for (const f of files) {
+        if (f.size <= room) {
+          attach.push(f);
+          room -= f.size;
+        } else left.push(f.originalname);
+      }
       const { html, text } = mailer.render({
         heading: `Ticket #${t.id}: ${t.subject}`,
         greeting: requester && to === requester.email ? `Dear ${firstName(requester.name)},` : 'Good day,',
-        paragraphs: String(message.body).split(/\n{2,}/),
+        paragraphs: [
+          ...String(message.body).split(/\n{2,}/),
+          ...(left.length ? [`${left.length === 1 ? 'This file was' : 'These files were'} too large to include in this email: ${left.join(', ')}.`] : []),
+        ],
         details: [
           ['Ticket', `#${t.id}`],
           ['Company', t.company_name],
@@ -281,7 +295,7 @@ module.exports = {
         ticketId: t.id,
         sender: { name: actor.name, email: actor.email },
         replyTo: ticketReplyAddress(t.id) || undefined,
-        attachments: files.map((f) => ({ filename: f.originalname, path: path.join(uploadsDir, path.basename(f.filename)), contentType: f.mimetype })),
+        attachments: attach.map((f) => ({ filename: f.originalname, path: path.join(uploadsDir, path.basename(f.filename)), contentType: f.mimetype })),
         html,
         text,
       });
@@ -552,6 +566,23 @@ module.exports = {
       ctaUrl: `${config.appUrl}/messages/group/${group.id}`,
       ctaLabel: 'Open conversation',
     }), { kind: 'group', link: `/messages/group/${group.id}` });
+  },
+
+  // Someone tagged people with @ in a group or admin chat. `place` reads after "in", for example 'the group "Ops"'.
+  async mentioned(actor, userIds, { place, link, body }) {
+    if (!userIds.length) return;
+    const recipients = await db.query(`SELECT ${USER_COLS} FROM users WHERE id IN (${db.inList(userIds)}) AND is_active = 1`, userIds);
+    sendEach(recipients, actor, (r) => ({
+      subject: `${actor.name} mentioned you in ${place}`,
+      heading: 'You were mentioned in a conversation',
+      inAppTitle: `${actor.name} mentioned you in ${place}`,
+      greeting: `Dear ${firstName(r.name)},`,
+      intro: `${actor.name} mentioned you in ${place}.`,
+      quote: excerpt(body, 600),
+      quoteLabel: 'Message',
+      ctaUrl: `${config.appUrl}${link}`,
+      ctaLabel: 'Open conversation',
+    }), { kind: 'mention', link });
   },
 
   // Unread group messages summary. `groups` is [{ id, name, company_name, count, messages: [{ user_name, body }] }].

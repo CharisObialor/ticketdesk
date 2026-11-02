@@ -3,8 +3,10 @@
 const path = require('path');
 const router = require('express').Router();
 const db = require('../db');
-const { upload, cleanup, uploadsDir, INLINE } = require('../uploads');
+const { messageUpload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const realtime = require('../realtime');
+const notify = require('../notify');
+const mentions = require('../mentions');
 const { requireAdmin } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
 
@@ -49,6 +51,16 @@ async function withAttachments(messages) {
   const atts = await db.query(`SELECT ${ATTACHMENT_COLS} FROM team_attachments WHERE message_id IN (${db.inList(ids)})`, ids);
   for (const m of messages) m.attachments = atts.filter((a) => Number(a.message_id) === Number(m.id));
   return messages;
+}
+
+// Bell (and email) for the admins a message tags with @. On an edit (`before` given), only the people newly tagged.
+async function notifyMentions(chat, actor, body, before = null) {
+  const people = await db.query('SELECT u.id, u.name FROM team_chat_members m JOIN users u ON u.id = m.user_id WHERE m.chat_id = ?', [chat.id]);
+  const tagged = before === null ? mentions.mentioned(body, people) : mentions.newlyMentioned(before, body, people, actor.id);
+  const ids = tagged.map((p) => Number(p.id)).filter((id) => id !== actor.id);
+  if (!ids.length) return;
+  const place = Number(chat.is_direct) ? 'an admin chat' : `the admin group "${chat.name}"`;
+  await notify.mentioned(actor, ids, { place, link: `/messages/team/${chat.id}`, body });
 }
 
 async function postSystem(chatId, actor, body) {
@@ -110,10 +122,10 @@ router.get(
   })
 );
 
-// A message, with up to 5 files (same limits and blocked types as other chats).
+// A message, with any number of files (same size limits and blocked types as other chats).
 router.post(
   '/team/chats/:id/messages',
-  upload.array('files'),
+  messageUpload.array('files'),
   wrap(async (req, res) => {
     const files = req.files || [];
     try {
@@ -138,6 +150,7 @@ router.post(
       const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [r.insertId])])).map(shape);
       realtime.toUsers(members, 'team:message', { chatId: chat.id, message });
       res.status(201).json({ message });
+      notifyMentions(chat, req.user, body).catch((err) => console.error('[mentions]', err.message));
     } catch (err) {
       cleanup(files);
       throw err;
@@ -172,6 +185,9 @@ router.patch(
     const body = clean(req.body.body, 10000);
     if (!body) throw new HttpError(400, 'A message cannot be empty');
     await db.query('UPDATE team_messages SET body = ?, edited_at = ? WHERE id = ?', [body, now(), m.id]);
+    notifyMentions(chat, req.user, body, m.body).catch((err) =>
+      console.error('[mentions]', err.message)
+    );
     const [message] = (await withAttachments([await db.one(`${messageSelect} WHERE m.id = ?`, [m.id])])).map(shape);
     realtime.toUsers(members, 'team:updated', { chatId: chat.id, message });
     res.json({ message });

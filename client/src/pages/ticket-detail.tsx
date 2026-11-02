@@ -933,7 +933,7 @@ function SavedReplyPicker({ ticket, onPick }: { ticket: Ticket; onPick: (text: s
 export function Composer({ ticket, isStaff }: { ticket: Ticket; isStaff: boolean }) {
   const qc = useQueryClient();
   const { sendTyping } = useRealtime();
-  const files = useFileList();
+  const files = useFileList({ kind: 'message' });
   const [body, setBody] = useState('');
   const [mode, setMode] = useState<'reply' | 'note'>('reply');
   const { isAdmin, app } = useSession();

@@ -36,7 +36,7 @@ import { Separator } from '@/components/ui/separator';
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
+import { MentionText, MentionTextarea, type MentionPerson } from '@/components/mention-textarea';
 import { EmptyState, UserAvatar } from '@/components/common';
 import { AttachButton, FileChips, useFileList } from '@/components/file-attachments';
 import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
@@ -412,6 +412,9 @@ function GroupPane({ groupId }: { groupId: number }) {
   const others = members.filter((mem) => mem.id !== user?.id);
   const seen = lastMine ? others.filter((mem) => mem.last_read_id >= lastMine.id) : [];
   const seenBy = seen.length && seen.length === others.length && others.length > 1 ? ['everyone'] : seen.map((mem) => mem.name.split(' ')[0]);
+  // Names that show as @tags: current members and anyone who has written here.
+  const names = [...members.map((mem) => mem.name), ...messages.map((m) => m.user_name ?? '')];
+  const people: MentionPerson[] = others.map((mem) => ({ id: mem.id, name: mem.name, detail: mem.role === 'client' ? null : ROLE_LABELS[mem.role] }));
   return (
     <>
       <PaneHeader
@@ -433,7 +436,7 @@ function GroupPane({ groupId }: { groupId: number }) {
             <MessageScrollerContent className="gap-1 px-4 py-4">
               {messages.map((m, i) => (
                 <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
-                  <ChatBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} />
+                  <ChatBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} names={names} me={user?.name} />
                 </MessageScrollerItem>
               ))}
               {typing.length > 0 && (
@@ -459,7 +462,7 @@ function GroupPane({ groupId }: { groupId: number }) {
           </Alert>
         </div>
       )}
-      <GroupComposer groupId={groupId} />
+      <GroupComposer groupId={groupId} people={people} />
       {showMembers && <MembersSheet data={query.data} onClose={() => setShowMembers(false)} />}
     </>
   );
@@ -479,7 +482,21 @@ function PaneSkeleton() {
 const sameBlock = (a: ChatMessage | undefined, b: ChatMessage) =>
   !!a && a.kind === 'message' && a.user_id === b.user_id && (parseTs(b.created_at)?.getTime() ?? 0) - (parseTs(a.created_at)?.getTime() ?? 0) < 5 * 60_000;
 
-function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; prev?: ChatMessage; own: boolean; seenBy?: string[] }) {
+function ChatBubble({
+  message: m,
+  prev,
+  own,
+  seenBy,
+  names,
+  me,
+}: {
+  message: ChatMessage;
+  prev?: ChatMessage;
+  own: boolean;
+  seenBy?: string[];
+  names: string[];
+  me?: string;
+}) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const save = useMutation({
@@ -527,7 +544,9 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
         ) : m.body === '(attachment)' && m.attachments.length > 0 ? null : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
             <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>
+                <MentionText text={m.body} names={names} me={own ? null : me} />
+              </BubbleContent>
             </Bubble>
             {own && (
               <Button
@@ -559,10 +578,10 @@ function ChatBubble({ message: m, prev, own, seenBy }: { message: ChatMessage; p
   );
 }
 
-function GroupComposer({ groupId }: { groupId: number }) {
+function GroupComposer({ groupId, people }: { groupId: number; people: MentionPerson[] }) {
   const qc = useQueryClient();
   const { sendGroupTyping } = useRealtime();
-  const files = useFileList();
+  const files = useFileList({ kind: 'message' });
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const typingTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -611,14 +630,15 @@ function GroupComposer({ groupId }: { groupId: number }) {
       <FileChips list={files} />
       <div className="flex items-end gap-2">
         <AttachButton list={files} />
-        <Textarea
+        <MentionTextarea
           rows={1}
           value={body}
+          people={people}
           placeholder="Write a message"
-          className="max-h-40 min-h-9 flex-1 resize-none py-2"
+          className="max-h-40 min-h-9 resize-none py-2"
           onKeyDown={onKeyDown}
-          onChange={(e) => {
-            setBody(e.target.value);
+          onValueChange={(value) => {
+            setBody(value);
             if (!typingOn.current) sendGroupTyping(groupId, true);
             typingOn.current = true;
             clearTimeout(typingTimer.current);
@@ -636,7 +656,7 @@ function GroupComposer({ groupId }: { groupId: number }) {
           {busy ? <Loader2 className="animate-spin" /> : <Send />}
         </Button>
       </div>
-      <p className="hidden text-xs text-muted-foreground sm:block">Enter to send, Shift + Enter for a new line</p>
+      <p className="hidden text-xs text-muted-foreground sm:block">Enter to send, Shift + Enter for a new line, @ to mention someone</p>
     </form>
   );
 }

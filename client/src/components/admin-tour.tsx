@@ -200,7 +200,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
             items={[
               <><B>Reply</B> to the client. They get an email too, sent from your own address and signed with your signature.</>,
               <><B>Internal note</B>: flip the reply box to a note to talk to the team. Clients never see these, ever.</>,
-              <><B>Attach files</B>: up to {upload.maxFiles} files, {upload.maxMb} MB each. Big photos get optimised automatically.</>,
+              <><B>Attach files</B>: as many as you need, {upload.maxMb} MB each. Big photos get optimised automatically.</>,
               <><B>CC and BCC</B>: loop other people into the email of a reply (admins only).</>,
               <><B>Saved replies</B>: drop in a ready-made answer instead of typing it out again.</>,
               <><B>Edit</B> your own messages if you made a typo. Everyone will see it was edited.</>,

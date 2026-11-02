@@ -4,8 +4,9 @@ const db = require('../db');
 const notify = require('../notify');
 const realtime = require('../realtime');
 const privacy = require('../privacy');
+const mentions = require('../mentions');
 const ticketsSvc = require('../services/tickets');
-const { upload, cleanup, uploadsDir, INLINE } = require('../uploads');
+const { messageUpload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const { wrap, now, HttpError } = require('../util');
 
@@ -109,6 +110,14 @@ async function addMessage(group, user, { body, kind = 'message', files = [] }) {
   };
   realtime.toUsers(await memberIds(group.id), 'chat:message', { groupId: group.id, message }, { admins: true });
   return message;
+}
+
+// Bell (and email) for the members a message tags with @. On an edit (`before` given), only the people newly tagged.
+async function notifyMentions(group, actor, body, before = null) {
+  const people = await getMembers(group.id);
+  const tagged = before === null ? mentions.mentioned(body, people) : mentions.newlyMentioned(before, body, people, actor.id);
+  const ids = tagged.map((p) => Number(p.id)).filter((id) => id !== actor.id);
+  if (ids.length) await notify.mentioned(actor, ids, { place: `the group "${group.name}"`, link: `/messages/group/${group.id}`, body });
 }
 
 const systemMessage = (group, actor, text) => addMessage(group, actor, { body: text, kind: 'system' });
@@ -340,7 +349,7 @@ router.post(
 
 router.post(
   '/groups/:id/messages',
-  upload.array('files'),
+  messageUpload.array('files'),
   withFiles(async (req, res) => {
     const u = req.user;
     const { group, members } = await loadGroup(req);
@@ -354,6 +363,7 @@ router.post(
     }
     const message = await addMessage(group, u, { body: body || '(attachment)', files: req.files });
     res.status(201).json({ message });
+    notifyMentions(group, u, body).catch((err) => console.error('[mentions]', err.message));
   })
 );
 
@@ -368,6 +378,10 @@ router.patch(
     const body = clean(req.body.body, 20000);
     if (!body) throw new HttpError(400, 'A message cannot be empty');
     await db.query('UPDATE chat_messages SET body = ?, edited_at = ? WHERE id = ?', [body, now(), m.id]);
+    // Only people the edit newly tags are told.
+    notifyMentions(group, req.user, body, m.body).catch((err) =>
+      console.error('[mentions]', err.message)
+    );
     const message = await db.one(
       'SELECT m.*, u.name AS user_name, u.role AS user_role FROM chat_messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.id = ?',
       [m.id]

@@ -7,7 +7,7 @@ const signoff = require('../signoff');
 const sla = require('../sla');
 const { scrub } = require('../privacy');
 const svc = require('../services/tickets');
-const { upload, workUpload, cleanup } = require('../uploads');
+const { upload, workUpload, messageUpload, cleanup } = require('../uploads');
 const { requireAuth, requireStaff, requireAdmin, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const mailer = require('../mailer');
 const { signatureFor, avatarUrl } = require('../email-template');
@@ -250,7 +250,7 @@ router.get(
 
 router.post(
   '/:id/messages',
-  upload.array('files'),
+  messageUpload.array('files'),
   withFiles(async (req, res) => {
     const u = req.user;
     const staff = isStaff(u);

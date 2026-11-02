@@ -38,6 +38,7 @@ export interface AppMeta {
   upload: { maxMb: number; maxFiles: number };
   mailUpload: { maxTotalMb: number; maxFiles: number };
   workUpload: { maxFiles: number; maxMb: number; maxTotalMb: number };
+  messageUpload?: { maxMb: number; maxTotalMb: number };
   // Clients only: their company asks for the site's OM and FSE on each new ticket.
   siteContacts?: boolean;
   sla: { defaults: SlaTargets; companies: Record<string, CompanySla> };

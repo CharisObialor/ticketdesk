@@ -39,12 +39,15 @@ const upload = multer({
 
 // Largest request an upload may be: every allowed file at full size plus room for the form fields.
 const WORK_UPDATE = /^\/tickets\/\d+\/work-updates$/;
+const MESSAGE = /^\/(tickets\/\d+|chats\/groups\/\d+|team\/chats\/\d+)\/messages$/;
 const maxRequestBytes = (req) =>
   (req.path === '/mail/send'
     ? config.mailUpload.maxTotalMb + 1
     : WORK_UPDATE.test(req.path)
       ? config.workUpload.maxTotalMb + 1
-      : config.upload.maxMb * config.upload.maxFiles + 1) *
+      : MESSAGE.test(req.path)
+        ? config.messageUpload.maxTotalMb + 1
+        : config.upload.maxMb * config.upload.maxFiles + 1) *
   1024 *
   1024;
 function limitRequestSize(req, res, next) {
@@ -57,6 +60,10 @@ function limitRequestSize(req, res, next) {
     if (WORK_UPDATE.test(req.path)) {
       req.resume();
       return next(new HttpError(413, `Photos are too large. A work update can carry up to ${config.workUpload.maxTotalMb} MB in total.`));
+    }
+    if (MESSAGE.test(req.path)) {
+      req.resume();
+      return next(new HttpError(413, `Attachments are too large. A message can carry up to ${config.messageUpload.maxTotalMb} MB of files in total.`));
     }
     req.resume();
     return next(new HttpError(413, `Upload too large. Attach up to ${config.upload.maxFiles} files of ${config.upload.maxMb} MB each.`));
@@ -92,8 +99,22 @@ const workUpload = multer({
   },
 });
 
+// Message attachments: no limit on how many, each file within the usual size (the request size check caps the total).
+const messageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex')),
+  }),
+  limits: { fileSize: config.messageUpload.maxMb * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    file.originalname = fixName(file.originalname).slice(0, 200);
+    if (BLOCKED.test(file.originalname)) return cb(new HttpError(400, `File type not allowed: ${file.originalname}`));
+    cb(null, true);
+  },
+});
+
 function cleanup(files = []) {
   for (const f of files) fs.unlink(f.path, () => {});
 }
 
-module.exports = { upload, mailUpload, workUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir, INLINE };
+module.exports = { upload, mailUpload, workUpload, messageUpload, cleanup, limitRequestSize, uploadsDir, transcriptsDir, INLINE };

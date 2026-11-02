@@ -17,13 +17,16 @@ import { optimiseImage } from '@/lib/image';
 import { cn } from '@/lib/utils';
 
 // Adds files while enforcing the server's count and size limits. `kind: 'mail'` uses the Mail page's larger,
-// per-email total limit instead of the per-file limit for portal uploads.
-export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' } = {}) {
+// per-email total limit instead of the per-file limit for portal uploads. `kind: 'message'` (chats and ticket
+// replies) takes any number of files, each within the per-file limit and all together within the message total.
+export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' | 'message' } = {}) {
   const { app } = useSession();
   const [files, setFiles] = useState<File[]>([]);
   const mail = kind === 'mail';
-  const maxFiles = (mail ? app?.mailUpload?.maxFiles : app?.upload.maxFiles) ?? 5;
+  const message = kind === 'message';
+  const maxFiles = message ? Infinity : ((mail ? app?.mailUpload?.maxFiles : app?.upload.maxFiles) ?? 5);
   const maxMb = (mail ? app?.mailUpload?.maxTotalMb : app?.upload.maxMb) ?? 10;
+  const maxTotalMb = message ? (app?.messageUpload?.maxTotalMb ?? 200) : null;
   const totalBytes = files.reduce((n, f) => n + f.size, 0);
 
   const add = async (incoming: FileList | File[] | null) => {
@@ -34,11 +37,13 @@ export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' } = 
     setFiles((cur) => {
       const next = [...cur];
       const rejected: string[] = [];
+      const overTotal: string[] = [];
       let total = cur.reduce((n, f) => n + f.size, 0);
       for (const f of list) {
         // Portal uploads: each file within the limit. Email: all attachments together within the limit.
         const fits = mail ? total + f.size <= limit : f.size <= limit;
         if (!fits) rejected.push(f.name);
+        else if (maxTotalMb && total + f.size > maxTotalMb * 1024 * 1024) overTotal.push(f.name);
         else {
           next.push(f);
           total += f.size;
@@ -51,6 +56,7 @@ export function useFileList({ kind = 'portal' }: { kind?: 'portal' | 'mail' } = 
             : `${rejected.join(', ')} ${rejected.length === 1 ? 'is' : 'are'} larger than ${maxMb} MB`
         );
       }
+      if (overTotal.length) toast.error(`${overTotal.join(', ')} would take this message over ${maxTotalMb} MB of files`);
       if (next.length > maxFiles) toast.error(`You can attach up to ${maxFiles} files`);
       return next.slice(0, maxFiles);
     });

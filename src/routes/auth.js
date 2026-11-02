@@ -41,6 +41,7 @@ function sessionInfo(user, session) {
       upload: config.upload,
       mailUpload: config.mailUpload,
       workUpload: config.workUpload,
+      messageUpload: config.messageUpload,
       // Response and resolution targets, per company where a company has its own.
       sla: require('../sla').forUser(user),
       // Clients of companies that ask for the site's OM and FSE on each new ticket.

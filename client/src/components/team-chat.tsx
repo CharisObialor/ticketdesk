@@ -9,7 +9,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Textarea } from '@/components/ui/textarea';
+import { MentionText, MentionTextarea, type MentionPerson } from '@/components/mention-textarea';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { Marker, MarkerContent } from '@/components/ui/marker';
 import { Message as UiMessage, MessageAvatar, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
@@ -92,6 +92,8 @@ export function TeamPane({ chatId }: { chatId: number }) {
   const lastMine = [...messages].reverse().find((m) => m.kind === 'message' && m.user_id === user?.id);
   const seen = lastMine ? others.filter((m) => m.last_read_id >= lastMine.id) : [];
   const seenBy = seen.length && seen.length === others.length && others.length > 1 ? ['everyone'] : seen.map((m) => m.name.split(' ')[0]);
+  const names = [...members.map((m) => m.name), ...messages.map((m) => m.user_name ?? '')];
+  const people: MentionPerson[] = others.map((m) => ({ id: m.id, name: m.name, detail: m.job_title, avatarUrl: m.avatar_url }));
 
   async function leave() {
     try {
@@ -142,7 +144,15 @@ export function TeamPane({ chatId }: { chatId: number }) {
               {messages.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No messages yet. Say hello.</p>}
               {messages.map((m, i) => (
                 <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.user_id === user?.id}>
-                  <TeamBubble message={m} prev={messages[i - 1]} own={m.user_id === user?.id} seenBy={m.id === lastMine?.id ? seenBy : undefined} chatId={chatId} />
+                  <TeamBubble
+                    message={m}
+                    prev={messages[i - 1]}
+                    own={m.user_id === user?.id}
+                    seenBy={m.id === lastMine?.id ? seenBy : undefined}
+                    chatId={chatId}
+                    names={names}
+                    me={user?.name}
+                  />
                 </MessageScrollerItem>
               ))}
             </MessageScrollerContent>
@@ -150,7 +160,7 @@ export function TeamPane({ chatId }: { chatId: number }) {
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <TeamComposer chatId={chatId} />
+      <TeamComposer chatId={chatId} people={people} />
       {adding && <AddAdminsDialog chatId={chatId} memberIds={members.map((m) => m.id)} onClose={() => setAdding(false)} />}
     </>
   );
@@ -159,7 +169,23 @@ export function TeamPane({ chatId }: { chatId: number }) {
 const sameBlock = (a: TeamMessage | undefined, b: TeamMessage) =>
   !!a && a.kind === 'message' && b.kind === 'message' && a.user_id === b.user_id && new Date(b.created_at.replace(' ', 'T')).getTime() - new Date(a.created_at.replace(' ', 'T')).getTime() < 5 * 60000;
 
-function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMessage; prev?: TeamMessage; own: boolean; seenBy?: string[]; chatId: number }) {
+function TeamBubble({
+  message: m,
+  prev,
+  own,
+  seenBy,
+  chatId,
+  names,
+  me,
+}: {
+  message: TeamMessage;
+  prev?: TeamMessage;
+  own: boolean;
+  seenBy?: string[];
+  chatId: number;
+  names: string[];
+  me?: string;
+}) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -206,7 +232,9 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
         ) : fileOnly ? null : (
           <div className={cn('group/bubble flex items-center gap-1', own && 'flex-row-reverse')}>
             <Bubble variant={own ? 'default' : 'muted'} align={own ? 'end' : 'start'} className="max-w-full">
-              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>{m.body}</BubbleContent>
+              <BubbleContent className={cn('rounded-2xl whitespace-pre-wrap', own ? 'rounded-tr-sm' : 'rounded-tl-sm')}>
+                <MentionText text={m.body} names={names} me={own ? null : me} />
+              </BubbleContent>
             </Bubble>
             {own && (
               <Button
@@ -234,9 +262,9 @@ function TeamBubble({ message: m, prev, own, seenBy, chatId }: { message: TeamMe
   );
 }
 
-function TeamComposer({ chatId }: { chatId: number }) {
+function TeamComposer({ chatId, people }: { chatId: number; people: MentionPerson[] }) {
   const qc = useQueryClient();
-  const files = useFileList();
+  const files = useFileList({ kind: 'message' });
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   async function send() {
@@ -269,13 +297,14 @@ function TeamComposer({ chatId }: { chatId: number }) {
       <FileChips list={files} />
       <div className="flex items-end gap-2">
         <AttachButton list={files} />
-        <Textarea
+        <MentionTextarea
           rows={1}
           maxLength={10000}
-          placeholder="Message the admins (Enter to send)"
-          className="max-h-40 min-h-10 flex-1 resize-none"
+          placeholder={people.length > 1 ? 'Message the admins. Type @ to mention someone' : 'Message (Enter to send)'}
+          className="max-h-40 min-h-10 resize-none"
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          people={people}
+          onValueChange={setBody}
           onKeyDown={onKey}
           onPaste={(e) => {
             const pasted = Array.from(e.clipboardData.files);
