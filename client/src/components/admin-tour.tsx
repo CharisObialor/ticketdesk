@@ -47,7 +47,10 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
   const first = user.name.split(' ')[0];
   const sla = app?.sla.defaults.response ?? { urgent: 60, high: 240, normal: 1440, low: 2880 };
   const upload = app?.upload ?? { maxMb: 10, maxFiles: 5 };
+  const messageTotal = app?.messageUpload?.maxTotalMb ?? 200;
+  const chat = app?.chat ?? { editMinutes: 15, deleteMinutes: 60 };
   const idle = app?.sessionIdleMinutes ?? 30;
+  const owner = user.is_owner;
 
   const steps: Step[] = [
     {
@@ -200,7 +203,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
             items={[
               <><B>Reply</B> to the client. They get an email too, sent from your own address and signed with your signature.</>,
               <><B>Internal note</B>: flip the reply box to a note to talk to the team. Clients never see these, ever.</>,
-              <><B>Attach files</B>: as many as you need, {upload.maxMb} MB each. Big photos get optimised automatically.</>,
+              <><B>Attach files</B>: as many as you need, up to {upload.maxMb} MB each and {messageTotal} MB per reply. Big photos get optimised automatically. Pictures, PDFs, video and audio open in a preview right on the page.</>,
               <><B>CC and BCC</B>: loop other people into the email of a reply (admins only).</>,
               <><B>Saved replies</B>: drop in a ready-made answer instead of typing it out again.</>,
               <><B>Edit</B> your own messages if you made a typo. Everyone will see it was edited.</>,
@@ -211,6 +214,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Escalate</B> with a reason when something needs more attention, and de-escalate when it's under control.</>,
               <><B>Schedule a site visit</B> when someone needs to go on site.</>,
               <><B>Download the conversation</B> (HTML, text or JSON, with or without internal notes), or save a transcript to the archive.</>,
+              ...(owner ? [<><B>Delete</B> (you, as the portal owner): removes a ticket for good, with its messages and files. You type a word to confirm, and it cannot be undone.</>] : []),
             ]}
           />
           {app?.ai && <Tip>There's a built-in assistant on tickets too. It can draft a reply for you. It always lands in the reply box for you to check, and it never sends anything on its own.</Tip>}
@@ -257,6 +261,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>When a ticket is resolved, the client gets a quick star rating request, and can also rate each admin who handled the job. You're told when you're rated, and every admin hears about a low score.</>,
               <>New accounts get a welcome email with a link to set their password.</>,
               <>Unread chat messages get rounded up into a summary email after a short while, so nobody misses anything.</>,
+              <>Emails you trigger (replies, assignments) go out from your own address. Automatic ones nobody sent by hand (reminders, SLA alerts, chat summaries, statements, account emails) come from the <B>systems@</B> mailbox when it's set up, and from the support mailbox otherwise. The System page shows which.</>,
             ]}
           />
           <Tip>Your email signature goes on everything you send. Set it up on your Profile page (we'll get there at the end).</Tip>
@@ -281,10 +286,37 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Start a group with <B>New group</B>, then add people, rename it, or leave it from the members list.</>,
               <>Use the search box to find any conversation, or any message inside one.</>,
               <>Unread chats show a count in the sidebar, and messages appear live.</>,
-              <><B>Admin chat</B>: message other admins privately, one to one or in a group. Only admins see these, and they never send emails.</>,
-              <>Your messages sit on the right, everyone else's on the left. Scrolled up to read? A button takes you back to the latest.</>,
+              <><B>Admin chat</B>: message other admins privately, one to one or in a group. Only admins see these. Direct chats show the other admin's picture; groups show our logo, and client conversations show the company's logo.</>,
+              <>Your messages sit on the right, everyone else's on the left, files included. Scrolled up to read? A button takes you back to the latest.</>,
             ]}
           />
+        </>
+      ),
+    },
+    {
+      title: 'Chatting: tags, replies and reactions',
+      route: '/messages',
+      body: (
+        <>
+          <P>Group chats and admin chats have the tools you'd expect from a messaging app:</P>
+          <List
+            items={[
+              <><B>Tag someone</B>: type <B>@</B> and pick a name from the list. Their name turns blue in the message box, and they get a bell notification (and an email, by their settings). Clients can tag us too.</>,
+              <><B>Files</B>: attach as many as you like, up to {upload.maxMb} MB each and {messageTotal} MB per message. Pictures, video, audio and PDFs preview right in the chat.</>,
+              <>Hover over any message and click the small arrow beside it for the message menu (on a phone, it's always there):</>,
+            ]}
+          />
+          <List
+            items={[
+              <><B>React</B> with one of the quick six, or <B>+</B> for the full list. Your most used ones come first. Click a reaction under a message to add yours or take it back.</>,
+              <><B>Reply</B> to a specific message. Your reply shows a preview of it, and clicking the preview jumps back to the original.</>,
+              <><B>Copy</B> the text, or <B>Forward</B> the message (files and all) to up to 10 other chats.</>,
+              <><B>Pin</B> up to 3 important messages. They sit in a bar at the top of the chat, and clicking it jumps to each one.</>,
+              <><B>Edit</B> your own message within {duration(chat.editMinutes)} of sending it.</>,
+              <><B>Delete for me</B> hides a message from your view only. <B>Delete for everyone</B> works on your own messages within {duration(chat.deleteMinutes)}, and leaves "This message was deleted" in its place.</>,
+            ]}
+          />
+          <Tip>Esc cancels a reply you've started, and Shift + Enter adds a new line instead of sending.</Tip>
         </>
       ),
     },
@@ -472,10 +504,11 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>See each company's open and total tickets and how many users they have.</>,
               <>Disable a company to cut off access for everyone there at once, and re-enable it any time.</>,
               <><B>Edit SLA</B> sets a company's own response and resolution times, and its fault categories.</>,
-              <><B>Sites</B>: each company's site IDs, locations and details. Add them one by one or paste a whole list. Clients pick the site when they log a ticket.</>,
+              <><B>Sites</B>: each company's site IDs, locations and details. Add them one by one or paste a whole list straight from a spreadsheet; pasting again updates the addresses of Site IDs already there. Clients pick the site when they log a ticket.</>,
               <>Turn on <B>Ask for OM and FSE</B> (in Edit company) to make every ticket for that company carry the site's Operations Manager and Field Service Engineer.</>,
               <><B>Monthly statement</B>: choose which of the company's people get last month's figures by email on the 1st, or send it now.</>,
               <>In <B>Edit SLA</B>, each fault category can carry a <B>template</B> (what the client should describe) and a number of <B>required photos</B>.</>,
+              ...(owner ? [<><B>Delete company</B> (owner only): shows what would go with it (people, tickets, sites) before anything is removed. Disabling is usually enough.</>] : []),
             ]}
           />
         </>
@@ -521,6 +554,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>New people get a welcome email with a link to set their own password. If they lose it, you can resend the invite.</>,
               <>Turn someone's <B>email notifications</B> on or off, or <B>disable</B> an account when they leave. Their history stays.</>,
               <>Filter by company, role or status, or search by name or email.</>,
+              <>A green dot on someone's picture means they're <B>online</B> right now. Otherwise you'll see when they were last seen.</>,
+              ...(owner ? [<><B>Delete permanently</B> (owner only): removes someone's account completely. Usually <B>disable</B> is the better choice, since it keeps their history.</>] : []),
             ]}
           />
           <Tip>Remember: only the portal owner can create or edit admin accounts. You'll see their account marked Owner.</Tip>
@@ -555,7 +590,8 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <><B>Escalation rules</B>: when tickets escalate on their own (no first reply in time, past the time to resolve, or gone quiet), to which level, who is alerted, and whether to raise the priority or assign it.</>,
               <><B>Backups</B>: the whole portal is backed up every night. You can see recent backups and run one now.</>,
               <><B>Automatic housekeeping</B>: auto-close for resolved tickets, the unread message summary emails, and the inactivity sign-out.</>,
-              <><B>Reply by email</B> and <B>outgoing email</B> status, so you can see straight away whether mail is flowing.</>,
+              <><B>Reply by email</B> and <B>outgoing email</B> status, so you can see straight away whether mail is flowing, and whether automatic emails are going out from systems@.</>,
+              ...(owner ? [<><B>Clear all tickets</B> (owner only): wipes every ticket and its figures and starts numbering again at #1. A backup is taken first, and you have to type a phrase to confirm.</>] : []),
             ]}
           />
           <Tip>If something goes wrong here, Actions will tell you anyway, so you don't need to check this page daily.</Tip>
@@ -575,7 +611,7 @@ function buildSteps(user: User, app: AppMeta | null): Step[] {
               <>Set your <B>email signature</B>. It goes on ticket replies and emails from your mailbox.</>,
               <>Choose your <B>SLA reminders</B>: how often you're reminded about tickets at risk, and whether by email too.</>,
               <>Turn on <B>notifications on this device</B> for pop-ups on your computer or phone (on iPhone, add the portal to your Home Screen first). While you have the portal open, updates come to the bell instead of your email; email only follows if you've been away for half an hour.</>,
-              <>Pick a <B>text size</B> that suits you: smaller fits more on screen, larger is easier on the eyes.</>,
+              <>Pick a <B>text size</B> that suits you: smaller fits more on screen, larger is easier on the eyes. It's saved per device, so your phone and laptop can each have their own.</>,
               <>Add your <B>phone number</B>, and decide whether you want <B>email notifications</B>.</>,
               <>Change your <B>password</B>: we email you a one-time code to confirm it's you. It needs to be a strong one, and the checklist tells you what's missing.</>,
             ]}
