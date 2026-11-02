@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Ban, ChevronDown, Copy, Forward, Loader2, Pencil, Pin, PinOff, Reply, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react';
+import { Ban, ChevronDown, Copy, Forward, Loader2, Pencil, Pin, PinOff, Plus, Reply, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
@@ -17,6 +17,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { EmojiPicker, rememberEmoji } from '@/components/emoji-picker';
 import { ConversationPicture } from '@/components/conversation-image';
 import { useInbox } from '@/hooks/use-inbox';
 import { useSession } from '@/hooks/use-session';
@@ -27,6 +29,7 @@ import type { Attachment, PinnedMessage, Reaction, ReplyPreview } from '@/lib/ty
 
 // Group chats ("group") and admin chats ("team") share these message actions.
 export type ChatScope = 'group' | 'team';
+// Quick reactions in the message menu; "+" opens the full emoji list.
 export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 export interface ActionMessage {
@@ -61,7 +64,15 @@ export function jumpToMessage(scope: ChatScope, id: number) {
     return;
   }
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  el.animate([{ backgroundColor: 'color-mix(in oklab, var(--primary) 16%, transparent)' }, { backgroundColor: 'transparent' }], { duration: 1800, easing: 'ease-out' });
+  el.animate(
+    [
+      {
+        backgroundColor: 'color-mix(in oklab, var(--primary) 16%, transparent)',
+      },
+      { backgroundColor: 'transparent' },
+    ],
+    { duration: 1800, easing: 'ease-out' }
+  );
 }
 
 export function useMessageActions(scope: ChatScope, conversationId: number) {
@@ -70,7 +81,13 @@ export function useMessageActions(scope: ChatScope, conversationId: number) {
   const base = `/chat-messages/${scope}`;
   const put = (message: ActionMessage, pins?: PinnedMessage[]) =>
     qc.setQueryData<ConversationData>(key, (p) =>
-      p ? { ...p, messages: p.messages.map((m) => (m.id === message.id ? { ...m, ...message } : m)), ...(pins ? { pins } : {}) } : p
+      p
+        ? {
+            ...p,
+            messages: p.messages.map((m) => (m.id === message.id ? { ...m, ...message } : m)),
+            ...(pins ? { pins } : {}),
+          }
+        : p
     );
   const run = async (fn: () => Promise<void>) => {
     try {
@@ -82,11 +99,20 @@ export function useMessageActions(scope: ChatScope, conversationId: number) {
   return {
     react: (id: number, emoji: string) =>
       run(async () => {
-        put((await api.post<{ message: ActionMessage }>(`${base}/${id}/react`, { emoji })).message);
+        put(
+          (
+            await api.post<{ message: ActionMessage }>(`${base}/${id}/react`, {
+              emoji,
+            })
+          ).message
+        );
       }),
     pin: (id: number, pinned: boolean) =>
       run(async () => {
-        const r = await api.post<{ message: ActionMessage; pins: PinnedMessage[] }>(`${base}/${id}/pin`, { pinned });
+        const r = await api.post<{
+          message: ActionMessage;
+          pins: PinnedMessage[];
+        }>(`${base}/${id}/pin`, { pinned });
         put(r.message, r.pins);
         toast.success(pinned ? 'Message pinned' : 'Message unpinned');
       }),
@@ -97,7 +123,10 @@ export function useMessageActions(scope: ChatScope, conversationId: number) {
       }),
     deleteForEveryone: (id: number) =>
       run(async () => {
-        const r = await api.delete<{ message: ActionMessage; pins: PinnedMessage[] }>(`${base}/${id}`);
+        const r = await api.delete<{
+          message: ActionMessage;
+          pins: PinnedMessage[];
+        }>(`${base}/${id}`);
         put(r.message, r.pins);
         qc.invalidateQueries({ queryKey: ['chats'] });
       }),
@@ -124,6 +153,10 @@ export function MessageMenu({
   const actions = useMessageActions(scope, conversationId);
   const [forwarding, setForwarding] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [picking, setPicking] = useState(false);
+  // Set when "+" is chosen. The emoji list opens once the menu has fully closed: opened earlier, the menu taking
+  // focus away as it closes would count as a click outside and close the list again.
+  const toPicker = useRef(false);
   const age = minutesSince(m.created_at);
   const editable = own && !m.deleted && !fileOnly(m) && age <= (app?.chat?.editMinutes ?? 15);
   const mine = m.reactions?.find((r) => user && r.user_ids.includes(user.id))?.emoji;
@@ -137,68 +170,108 @@ export function MessageMenu({
     }
   }
 
+  const react = (e: string) => {
+    rememberEmoji(e);
+    actions.react(m.id, e);
+  };
+
   return (
     <>
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="shrink-0 self-center opacity-100 data-[state=open]:opacity-100 sm:opacity-0 sm:group-hover/bubble:opacity-100 focus-visible:opacity-100"
-            aria-label="Message options"
+      <Popover open={picking} onOpenChange={setPicking}>
+        <DropdownMenu modal={false}>
+          <PopoverAnchor asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={cn(
+                  'shrink-0 self-center opacity-100 data-[state=open]:opacity-100 sm:opacity-0 sm:group-hover/bubble:opacity-100 focus-visible:opacity-100',
+                  picking && 'sm:opacity-100'
+                )}
+                aria-label="Message options"
+              >
+                <ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+          </PopoverAnchor>
+          <DropdownMenuContent
+            align={own ? 'end' : 'start'}
+            className="w-60"
+            onCloseAutoFocus={(e) => {
+              if (!toPicker.current) return;
+              e.preventDefault();
+              toPicker.current = false;
+              setPicking(true);
+            }}
           >
-            <ChevronDown />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align={own ? 'end' : 'start'} className="w-56">
-          {!m.deleted && (
-            <>
-              <div className="flex items-center justify-between gap-0.5 p-1" role="group" aria-label="React">
-                {REACTIONS.map((e) => (
+            {!m.deleted && (
+              <>
+                <div className="flex items-center justify-between gap-0.5 p-1" role="group" aria-label="React">
+                  {REACTIONS.map((e) => (
+                    <DropdownMenuItem
+                      key={e}
+                      aria-label={`React ${e}`}
+                      className={cn('size-8 justify-center p-0 text-lg leading-none', mine === e && 'bg-accent ring-1 ring-primary/40')}
+                      onSelect={() => react(e)}
+                    >
+                      {e}
+                    </DropdownMenuItem>
+                  ))}
                   <DropdownMenuItem
-                    key={e}
-                    aria-label={`React ${e}`}
-                    className={cn('size-8 justify-center p-0 text-lg leading-none', mine === e && 'bg-accent ring-1 ring-primary/40')}
-                    onSelect={() => actions.react(m.id, e)}
+                    aria-label="More reactions"
+                    title="More reactions"
+                    className="size-8 justify-center p-0 text-muted-foreground"
+                    onSelect={() => {
+                      toPicker.current = true;
+                    }}
                   >
-                    {e}
+                    <Plus />
                   </DropdownMenuItem>
-                ))}
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={onReply}>
-                <Reply />
-                Reply
-              </DropdownMenuItem>
-              {!fileOnly(m) && (
-                <DropdownMenuItem onSelect={copy}>
-                  <Copy />
-                  Copy
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onReply}>
+                  <Reply />
+                  Reply
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onSelect={() => setForwarding(true)}>
-                <Forward />
-                Forward
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => actions.pin(m.id, !m.pinned)}>
-                {m.pinned ? <PinOff /> : <Pin />}
-                {m.pinned ? 'Unpin' : 'Pin'}
-              </DropdownMenuItem>
-              {editable && (
-                <DropdownMenuItem onSelect={onEdit}>
-                  <Pencil />
-                  Edit
+                {!fileOnly(m) && (
+                  <DropdownMenuItem onSelect={copy}>
+                    <Copy />
+                    Copy
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => setForwarding(true)}>
+                  <Forward />
+                  Forward
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-            </>
-          )}
-          <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
-            <Trash2 />
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                <DropdownMenuItem onSelect={() => actions.pin(m.id, !m.pinned)}>
+                  {m.pinned ? <PinOff /> : <Pin />}
+                  {m.pinned ? 'Unpin' : 'Pin'}
+                </DropdownMenuItem>
+                {editable && (
+                  <DropdownMenuItem onSelect={onEdit}>
+                    <Pencil />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
+              <Trash2 />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <PopoverContent align={own ? 'end' : 'start'} className="w-auto p-0">
+          <EmojiPicker
+            selected={mine}
+            onPick={(e) => {
+              setPicking(false);
+              actions.react(m.id, e);
+            }}
+          />
+        </PopoverContent>
+      </Popover>
       {forwarding && <ForwardDialog scope={scope} conversationId={conversationId} message={m} onClose={() => setForwarding(false)} />}
       <DeleteDialog
         open={deleting}
@@ -280,12 +353,17 @@ function ForwardDialog({ scope, conversationId, message, onClose }: { scope: Cha
     [inbox.data, q, scope, conversationId]
   );
   const toggle = (k: string) =>
-    setChosen((c) => (c.includes(k) ? c.filter((x) => x !== k) : c.length >= MAX_FORWARD ? (toast.error(`Up to ${MAX_FORWARD} chats at a time`), c) : [...c, k]));
+    setChosen((c) =>
+      c.includes(k) ? c.filter((x) => x !== k) : c.length >= MAX_FORWARD ? (toast.error(`Up to ${MAX_FORWARD} chats at a time`), c) : [...c, k]
+    );
 
   async function send() {
     setBusy(true);
     try {
-      const to = chosen.map((k) => ({ type: k.split(':')[0], id: Number(k.split(':')[1]) }));
+      const to = chosen.map((k) => ({
+        type: k.split(':')[0],
+        id: Number(k.split(':')[1]),
+      }));
       const r = await api.post<{ sent: number }>(`/chat-messages/${scope}/${message.id}/forward`, { to });
       qc.invalidateQueries({ queryKey: ['chats'] });
       for (const t of to) qc.invalidateQueries({ queryKey: [t.type, t.id] });
@@ -346,8 +424,8 @@ export function ReplyQuote({ reply, own, scope, meId }: { reply: ReplyPreview; o
       type="button"
       onClick={() => jumpToMessage(scope, reply.id)}
       className={cn(
-        'mb-1.5 block w-full min-w-0 rounded-md border-l-[3px] px-2 py-1 text-left text-xs whitespace-normal',
-        own ? 'border-primary-foreground/70 bg-primary-foreground/15' : 'border-primary bg-background/70'
+        'mb-1.5 block w-full min-w-0 rounded-md border px-2 py-1 text-left text-xs whitespace-normal',
+        own ? 'border-primary-foreground/25 bg-primary-foreground/15' : 'border-border bg-background/70'
       )}
     >
       <span className="block font-semibold">{reply.user_id && reply.user_id === meId ? 'You' : (reply.user_name ?? 'Someone')}</span>
@@ -407,7 +485,7 @@ export function ReactionChips({ message: m, own, scope, conversationId }: { mess
 // Above the message box while replying: who and what is being answered.
 export function ReplyBar({ message, meId, onCancel }: { message: ActionMessage; meId?: number; onCancel: () => void }) {
   return (
-    <div className="flex items-start gap-2 rounded-md border-l-[3px] border-primary bg-muted/60 py-1.5 pr-1 pl-2.5 text-xs">
+    <div className="flex items-start gap-2 rounded-md border bg-muted/60 py-1.5 pr-1 pl-2.5 text-xs">
       <Reply className="mt-0.5 size-3.5 shrink-0 text-primary" />
       <div className="min-w-0 flex-1">
         <div className="font-semibold text-primary">Replying to {message.user_id === meId ? 'yourself' : (message.user_name ?? 'Someone')}</div>

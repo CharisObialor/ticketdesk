@@ -47,7 +47,7 @@ router.post(
     ensureMessage(ctx.row);
     ensureMember(ctx);
     const emoji = req.body.emoji ? String(req.body.emoji) : null;
-    if (emoji && !extras.REACTIONS.includes(emoji)) throw new HttpError(400, 'Choose one of the reactions shown');
+    if (emoji && !extras.isEmoji(emoji)) throw new HttpError(400, 'A reaction must be a single emoji');
     const had = await db.one('SELECT emoji FROM chat_reactions WHERE scope = ? AND message_id = ? AND user_id = ?', [ctx.scope, ctx.row.id, req.user.id]);
     await db.query('DELETE FROM chat_reactions WHERE scope = ? AND message_id = ? AND user_id = ?', [ctx.scope, ctx.row.id, req.user.id]);
     if (emoji && (!had || had.emoji !== emoji)) {

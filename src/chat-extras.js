@@ -11,7 +11,9 @@ const SCOPES = {
   group: { messages: 'chat_messages', attachments: 'chat_attachments', conv: 'group_id' },
   team: { messages: 'team_messages', attachments: 'team_attachments', conv: 'chat_id' },
 };
-const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+// A reaction is a single emoji (with its skin tone, variation and joiner characters): no letters, numbers or text.
+const EMOJI = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3])+$/u;
+const isEmoji = (v) => typeof v === 'string' && v.length <= 16 && EMOJI.test(v) && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(v);
 const MAX_PINS = 3;
 const DELETED_BODY = 'This message was deleted';
 
@@ -117,4 +119,4 @@ async function deleteForEveryone(scope, message) {
   for (const f of files) fs.unlink(path.join(uploadsDir, path.basename(f.stored_name)), () => {});
 }
 
-module.exports = { SCOPES, REACTIONS, MAX_PINS, DELETED_BODY, canEdit, canDeleteForEveryone, notHidden, decorate, pinsFor, copyFiles, deleteForEveryone, quoted };
+module.exports = { SCOPES, isEmoji, MAX_PINS, DELETED_BODY, canEdit, canDeleteForEveryone, notHidden, decorate, pinsFor, copyFiles, deleteForEveryone, quoted };
