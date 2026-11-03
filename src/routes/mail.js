@@ -86,7 +86,7 @@ async function lookupPhoto(email) {
   if (config.graph.senderDomains.includes(email.split('@')[1]) && Date.now() > photosRefusedUntil) {
     try {
       const buf = await graph.userPhoto(email);
-      if (buf && buf.length) return { buf, type: imageType(buf) };
+      if (buf && buf.length) return { buf, type: imageType(buf), microsoft: true };
     } catch (err) {
       // No permission for photos (or Microsoft is unavailable): stop asking for a while and use portal photos.
       if (err.status === 403 || err.status === 401) {
@@ -101,6 +101,10 @@ async function lookupPhoto(email) {
   if (avatar) return { redirect: `${config.appUrl}${avatar}` };
   return (await gravatar(email)) || (await bimiLogo(email.split('@')[1])) || null;
 }
+
+// Whether this answer for one of our own addresses stands in for a Microsoft 365 picture Microsoft would not give.
+const standIn = (email, found) =>
+  config.graph.senderDomains.includes(email.split('@')[1]) && Date.now() <= photosRefusedUntil && !(found && found.microsoft);
 
 const PHOTO_MAX_BYTES = 512 * 1024;
 const fetchPicture = async (url) => {
@@ -149,9 +153,12 @@ router.get(
     if (hit.pending) {
       // A passing failure is not remembered, so the next request tries again.
       if (found === undefined) photoCache.delete(email);
-      else Object.assign(hit, { pending: null, found, at: Date.now() });
+      else Object.assign(hit, { pending: null, found, at: Date.now(), standIn: standIn(email, found) });
     }
-    res.set('Cache-Control', `private, max-age=${found ? 21600 : 3600}`);
+    // A colleague shown without their Microsoft 365 picture because Microsoft refused: kept only briefly, so their
+    // real picture appears soon after the permission is granted.
+    if (hit.standIn) hit.at = Math.min(hit.at, Date.now() - PHOTO_TTL + 10 * 60000);
+    res.set('Cache-Control', `private, max-age=${hit.standIn ? 300 : found ? 21600 : 3600}`);
     if (!found) return res.status(404).end();
     if (found.redirect) return res.redirect(302, found.redirect);
     // Pictures from other servers can be SVG: never let one run anything if opened directly.
