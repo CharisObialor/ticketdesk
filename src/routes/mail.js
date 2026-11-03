@@ -75,7 +75,7 @@ router.get(
 
 // A sender's picture for the Mail page, from the first of: their Microsoft 365 profile photo (addresses in our
 // organisation), their portal photo, their Gravatar, or their company's BIMI logo (the brand logo Gmail and Yahoo
-// show). 404 when there is none (the page shows initials). Google and Yahoo do not share their users' own photos.
+// show). An empty answer (204) when there is none (the page shows initials). Google and Yahoo do not share their users' own photos.
 // Results are kept for a few hours so nobody is asked again for every email in the list.
 const PHOTO_TTL = 6 * 3600e3;
 const photoCache = new Map();
@@ -159,7 +159,8 @@ router.get(
     // real picture appears soon after the permission is granted.
     if (hit.standIn) hit.at = Math.min(hit.at, Date.now() - PHOTO_TTL + 10 * 60000);
     res.set('Cache-Control', `private, max-age=${hit.standIn ? 300 : found ? 21600 : 3600}`);
-    if (!found) return res.status(404).end();
+    // No picture: an empty answer (not 404), so the page quietly shows initials without errors in the browser console.
+    if (!found) return res.status(204).end();
     if (found.redirect) return res.redirect(302, found.redirect);
     // Pictures from other servers can be SVG: never let one run anything if opened directly.
     res.set('X-Content-Type-Options', 'nosniff');
