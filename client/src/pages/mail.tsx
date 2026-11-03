@@ -688,8 +688,15 @@ function MessageRow({
 
 // Email HTML is shown in a locked-down frame: no scripts, no access to the portal, links open in a new tab.
 // Remote pictures arrive through the portal's image proxy (the server rewrites their links); embedded ones are inline.
-function MailBody({ body }: { body: MailMessage['body'] }) {
+// Junk email is shown as plain text, without its formatting or pictures: that is where phishing usually lands.
+function MailBody({ body: original, plain = false }: { body: MailMessage['body']; plain?: boolean }) {
   const doc = useMemo(() => {
+    let body = original;
+    if (plain && body.contentType !== 'text') {
+      const parsed = new DOMParser().parseFromString(body.content, 'text/html');
+      parsed.querySelectorAll('style, title').forEach((el) => el.remove());
+      body = { ...body, contentType: 'text', content: (parsed.body.innerText || parsed.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim() };
+    }
     const base =
       '<base target="_blank"><style>body{font:14px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;margin:16px;word-wrap:break-word}img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d1d5db;padding-left:1ex;color:#4b5563}</style>';
     if (body.contentType === 'text') {
@@ -697,7 +704,7 @@ function MailBody({ body }: { body: MailMessage['body'] }) {
       return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body><pre>${esc}</pre></body></html>`;
     }
     return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${body.content}</body></html>`;
-  }, [body]);
+  }, [original, plain]);
   return (
     <iframe
       title="Email content"
@@ -903,8 +910,11 @@ function Reader({
           </div>
         )}
         <Separator />
+        {folder === 'junkemail' && (
+          <p className="text-xs text-muted-foreground">This is in Junk, so it is shown as plain text, without its formatting, pictures or buttons.</p>
+        )}
         <div className="flex min-h-[360px] flex-1 flex-col">
-          <MailBody body={m.body} />
+          <MailBody body={m.body} plain={folder === 'junkemail'} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => onCompose({ mode: 'reply', ref: m })}>

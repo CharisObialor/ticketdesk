@@ -219,7 +219,7 @@ router.get(
   '/messages/:id',
   graphWrap(async (req, res) => {
     const message = await graph.getMessage(req.mailbox, id(req));
-    if (message.body && message.body.contentType !== 'text') message.body.content = imageProxy.rewriteImages(message.body.content);
+    if (message.body && message.body.contentType !== 'text') message.body.content = imageProxy.rewriteImages(cleanIncoming(message.body.content));
     if (!message.isRead) {
       await graph.setRead(req.mailbox, message.id, true).catch(() => {});
       unreadCache.delete(req.mailbox);
@@ -343,6 +343,32 @@ const addressList = (v) => {
   if (bad.length) throw new HttpError(400, `Not a valid email address: ${bad.join(', ')}`);
   return [...new Set(list)];
 };
+
+// Received emails, before the Mail page shows them: the email keeps its look (layout, styles, tables, pictures, links)
+// but loses anything a phishing email uses to imitate a sign-in page or act on its own: forms, text and password
+// boxes, buttons, frames, plugins, scripts, page refreshes, event handlers and javascript: links. Shown on our own
+// site, a fake Microsoft sign-in form would make browsers' phishing checks flag the portal itself.
+const INCOMING_DROP = new Set(['script', 'noscript', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'input', 'button', 'select', 'textarea', 'option', 'optgroup', 'datalist', 'keygen', 'output', 'meta', 'base', 'link', 'portal', 'dialog', 'template', 'svg', 'math']);
+function cleanIncoming(html) {
+  return sanitizeHtml(String(html || ''), {
+    allowedTags: false,
+    allowedAttributes: false,
+    allowVulnerableTags: true, // <style> is kept for the email's own layout; the frame it is shown in runs no scripts
+    allowedSchemes: ['http', 'https', 'mailto', 'tel', 'cid', 'data'],
+    allowedSchemesByTag: { a: ['http', 'https', 'mailto', 'tel'], img: ['http', 'https', 'data', 'cid'] },
+    allowedSchemesAppliedToAttributes: ['href', 'src', 'cite', 'action', 'background', 'poster', 'formaction', 'srcset', 'xlink:href'],
+    exclusiveFilter: (frame) => INCOMING_DROP.has(frame.tag),
+    nonTextTags: ['script', 'noscript', 'textarea', 'option', 'title', 'template'],
+    transformTags: {
+      // A form's contents stay (minus its controls), but it can no longer be a form.
+      form: 'div',
+      '*': (tagName, attribs) => ({
+        tagName,
+        attribs: Object.fromEntries(Object.entries(attribs).filter(([k]) => !/^on/i.test(k) && !['action', 'formaction', 'http-equiv', 'srcdoc', 'contenteditable'].includes(k.toLowerCase()))),
+      }),
+    },
+  });
+}
 
 // Formatted emails from the editor: only ordinary formatting survives (no scripts, forms, frames or event handlers),
 // so a pasted page can never smuggle anything harmful into an email sent from a company mailbox.
