@@ -97,6 +97,8 @@ const FOLDER_ICONS: Record<string, LucideIcon> = {
 };
 
 const who = (a?: Address) => a?.emailAddress?.name || a?.emailAddress?.address || 'Unknown';
+// The sender's picture: their Microsoft 365 photo, or their portal photo (initials show when there is neither).
+const photo = (a?: Address) => (a?.emailAddress?.address ? apiHref(`/api/mail/photo?email=${encodeURIComponent(a.emailAddress.address)}`) : null);
 const addr = (a?: Address) => (a?.emailAddress?.address || '').toLowerCase();
 const flagged = (m: MailSummary) => m.flag?.flagStatus === 'flagged';
 // Every Mail request names the mailbox it is for: the admin's own, or a shared one they were given access to.
@@ -537,6 +539,7 @@ function MessageRow({
 }) {
   const sentFolder = folder === 'sentitems' || folder === 'drafts';
   const person = sentFolder ? (m.toRecipients ?? []).map(who).join(', ') || '(no recipients)' : who(m.from);
+  const personPhoto = photo(sentFolder ? m.toRecipients?.[0] : m.from);
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
     fn();
@@ -556,10 +559,10 @@ function MessageRow({
             !m.isRead && 'bg-primary/[0.03]'
           )}
         >
-          {!m.isRead && <span className="absolute top-0 bottom-0 left-0 w-[3px] bg-primary" aria-hidden />}
-          <UserAvatar name={person} className="mt-0.5 size-8 text-xs" />
+          <UserAvatar name={person} src={personPhoto} className="mt-0.5 size-8 text-xs" />
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2">
+              {!m.isRead && <span className="size-2 shrink-0 self-center rounded-full bg-primary" aria-label="Unread" />}
               <span className={cn('min-w-0 flex-1 truncate text-sm', !m.isRead ? 'font-semibold' : 'font-medium text-foreground/90')}>
                 {m.isDraft && <span className="mr-1 text-red-600 dark:text-red-400">[Draft]</span>}
                 {person}
@@ -860,7 +863,7 @@ function Reader({
           )}
         </div>
         <div className="flex items-start gap-3">
-          <UserAvatar name={who(m.from)} className="size-10" />
+          <UserAvatar name={who(m.from)} src={photo(m.from)} className="size-10" />
           <div className="min-w-0 flex-1 text-sm">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
               <span className="font-semibold">

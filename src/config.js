@@ -21,6 +21,12 @@ if (!jwtSecret || jwtSecret === 'change-me') {
 const graphReady = !!(env.MS_TENANT_ID && env.MS_CLIENT_ID && env.MS_CLIENT_SECRET && env.MS_MAILBOX);
 
 const int = (v, d) => (v === undefined || v === '' ? d : parseInt(v, 10));
+const appUrl = (env.APP_URL || `http://localhost:${int(env.PORT, 3000)}`).replace(/\/+$/, '');
+// A copy running on a computer (localhost) never emails real people or reads the real mailbox, even with the
+// Microsoft 365 settings in its .env: its test tickets would reach real inboxes, and it would compete with the live
+// portal for replies. Emails are printed instead. Set LOCAL_REAL_EMAIL=true to allow it on purpose.
+const localCopy = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(appUrl);
+const emailOff = localCopy && env.LOCAL_REAL_EMAIL !== 'true';
 
 module.exports = {
   root,
@@ -29,7 +35,8 @@ module.exports = {
   port: int(env.PORT, 3000),
   appName: env.APP_NAME || 'DateHeight Support',
   companyName: env.COMPANY_NAME || 'DateHeight Integrated Nigeria Limited',
-  appUrl: (env.APP_URL || `http://localhost:${int(env.PORT, 3000)}`).replace(/\/+$/, ''),
+  appUrl,
+  emailOff,
   // Where the API runs, when the website and the API are on different addresses (dateheightsupport.com and
   // api.dateheightsupport.com). Leave unset when one app serves both.
   apiUrl: (env.API_URL || env.APP_URL || `http://localhost:${int(env.PORT, 3000)}`).replace(/\/+$/, ''),
@@ -87,7 +94,7 @@ module.exports = {
   // Inbound email (reply by email). With Microsoft 365 it reads the MS_MAILBOX inbox (set REPLY_BY_EMAIL=false to turn off);
   // otherwise it is enabled when IMAP_HOST is set and defaults to the SMTP account.
   inbound: {
-    enabled: graphReady && (env.MAIL_PROVIDER || 'graph').toLowerCase() === 'graph' ? env.REPLY_BY_EMAIL !== 'false' : !!env.IMAP_HOST,
+    enabled: !emailOff && (graphReady && (env.MAIL_PROVIDER || 'graph').toLowerCase() === 'graph' ? env.REPLY_BY_EMAIL !== 'false' : !!env.IMAP_HOST),
     // REPLY_BY_EMAIL=replies-only: only emails sent to the portal's reply addresses are read; the rest of the inbox is
     // left untouched (for a personal mailbox). New tickets cannot be opened by email in this mode.
     repliesOnly: env.REPLY_BY_EMAIL === 'replies-only',

@@ -1,8 +1,11 @@
 // Admins' own Microsoft 365 mailbox inside the portal: folders, messages, reading, replying and composing.
 // The mailbox is always the signed-in admin's own address; it is never taken from the request.
 const path = require('path');
+const crypto = require('crypto');
+const dns = require('dns');
 const router = require('express').Router();
 const config = require('../config');
+const db = require('../db');
 const graph = require('../msgraph');
 const imageProxy = require('../image-proxy');
 const exchange = require('../exchange');
@@ -67,6 +70,94 @@ router.get(
     const boxes = await mailboxesFor(req.user);
     const withCounts = await Promise.all(boxes.map(async (b) => ({ ...b, unread: await unreadFor(b.address) })));
     res.json({ mailboxes: withCounts, shared: exchange.status() });
+  })
+);
+
+// A sender's picture for the Mail page, from the first of: their Microsoft 365 profile photo (addresses in our
+// organisation), their portal photo, their Gravatar, or their company's BIMI logo (the brand logo Gmail and Yahoo
+// show). 404 when there is none (the page shows initials). Google and Yahoo do not share their users' own photos.
+// Results are kept for a few hours so nobody is asked again for every email in the list.
+const PHOTO_TTL = 6 * 3600e3;
+const photoCache = new Map();
+let photosRefusedUntil = 0;
+const imageType = (buf) => (buf[0] === 0x89 && buf[1] === 0x50 ? 'image/png' : buf[0] === 0x47 && buf[1] === 0x49 ? 'image/gif' : 'image/jpeg');
+
+async function lookupPhoto(email) {
+  if (config.graph.senderDomains.includes(email.split('@')[1]) && Date.now() > photosRefusedUntil) {
+    try {
+      const buf = await graph.userPhoto(email);
+      if (buf && buf.length) return { buf, type: imageType(buf) };
+    } catch (err) {
+      // No permission for photos (or Microsoft is unavailable): stop asking for a while and use portal photos.
+      if (err.status === 403 || err.status === 401) {
+        if (Date.now() > photosRefusedUntil) console.warn(`[mail] profile photos unavailable (${err.code || err.status}); add ProfilePhoto.Read.All to the app`);
+        photosRefusedUntil = Date.now() + 3600e3;
+      } else if (err.status !== 404) return undefined; // a passing failure: do not remember it
+    }
+  }
+  const { avatarPath } = require('../auth');
+  const u = await db.one('SELECT avatar FROM users WHERE LOWER(email) = ? AND is_active = 1', [email]);
+  const avatar = u && avatarPath(u.avatar);
+  if (avatar) return { redirect: `${config.appUrl}${avatar}` };
+  return (await gravatar(email)) || (await bimiLogo(email.split('@')[1])) || null;
+}
+
+const PHOTO_MAX_BYTES = 512 * 1024;
+const fetchPicture = async (url) => {
+  const img = await imageProxy.fetchImage(url).catch(() => null);
+  return img && img.data.length && img.data.length <= PHOTO_MAX_BYTES ? { buf: img.data, type: img.type } : null;
+};
+
+// Gravatar answers 404 (d=404) when the address has no picture. Only a hash of the address is sent.
+const gravatar = (email) => fetchPicture(`https://gravatar.com/avatar/${crypto.createHash('sha256').update(email).digest('hex')}?s=96&d=404`);
+
+// BIMI: a company's published email logo, from a DNS record at default._bimi.<domain> (or its parent domain).
+// Personal email services are skipped: their logo would show for every one of their users.
+const PERSONAL_MAIL = /^(gmail|googlemail|yahoo|ymail|rocketmail|outlook|hotmail|live|msn|icloud|me|mac|aol|proton|protonmail|pm|zoho|gmx|mail|yandex)\.(com|net|me|ch|de|ru|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/i;
+const bimiCache = new Map();
+async function bimiLogo(domain) {
+  if (!domain || PERSONAL_MAIL.test(domain)) return null;
+  const hit = bimiCache.get(domain);
+  if (hit && Date.now() - hit.at < PHOTO_TTL) return hit.logo;
+  let logo = null;
+  const labels = domain.split('.');
+  for (let i = 0; i <= labels.length - 2 && !logo; i++) {
+    const records = await dns.promises.resolveTxt(`default._bimi.${labels.slice(i).join('.')}`).catch(() => []);
+    const record = records.map((r) => r.join('')).find((r) => /^v=BIMI1/i.test(r.trim()));
+    const url = record && (/(?:^|;)\s*l=([^;\s]+)/i.exec(record) || [])[1];
+    if (url && url.startsWith('https://')) logo = await fetchPicture(url);
+    if (record) break;
+  }
+  bimiCache.set(domain, { at: Date.now(), logo });
+  if (bimiCache.size > 2000) bimiCache.delete(bimiCache.keys().next().value);
+  return logo;
+}
+
+router.get(
+  '/photo',
+  wrap(async (req, res) => {
+    const email = String(req.query.email || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || email.length > 254) throw new HttpError(400, 'Not an email address');
+    // One lookup per address at a time: requests arriving while it runs wait for the same answer.
+    let hit = photoCache.get(email);
+    if (!hit || (!hit.pending && Date.now() - hit.at > PHOTO_TTL)) {
+      hit = { at: Date.now(), pending: lookupPhoto(email).catch(() => undefined) };
+      photoCache.set(email, hit);
+      if (photoCache.size > 2000) photoCache.delete(photoCache.keys().next().value);
+    }
+    const found = hit.pending ? await hit.pending : hit.found;
+    if (hit.pending) {
+      // A passing failure is not remembered, so the next request tries again.
+      if (found === undefined) photoCache.delete(email);
+      else Object.assign(hit, { pending: null, found, at: Date.now() });
+    }
+    res.set('Cache-Control', `private, max-age=${found ? 21600 : 3600}`);
+    if (!found) return res.status(404).end();
+    if (found.redirect) return res.redirect(302, found.redirect);
+    // Pictures from other servers can be SVG: never let one run anything if opened directly.
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    res.type(found.type).send(found.buf);
   })
 );
 

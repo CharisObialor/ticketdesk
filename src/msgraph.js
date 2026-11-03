@@ -236,8 +236,20 @@ async function compose(mailbox, { to, cc, bcc, subject, html, attachments = [], 
   await call('POST', `${msgPath(mailbox, draft.id)}/send`);
 }
 
+// The profile photo of an account in our Microsoft 365 organisation (small size), or null when it has none.
+// Needs the app permission ProfilePhoto.Read.All (or User.Read.All); without it Microsoft answers 403.
+async function userPhoto(email) {
+  try {
+    return await call('GET', `${mailboxPath(email)}/photos/96x96/$value`, { raw: true });
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+}
+
 module.exports = {
   getToken,
+  userPhoto,
   sendMime,
   sendLarge,
   listUnread,

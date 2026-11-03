@@ -74,6 +74,10 @@ async function systemMailbox() {
 // One delivery attempt. If Microsoft refuses to send as the staff member (or the system mailbox), it goes from the
 // support mailbox instead.
 async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId, replyTo, sender, system, unsubscribeUrl }) {
+  if (config.emailOff) {
+    console.log(`[mail:local] not sent (copy on this computer) to=${to} subject="${subject}"`);
+    return;
+  }
   const own = system ? null : sendAsMailbox(sender);
   let via = system ? await systemMailbox() : own ? { address: own, name: `${sender.name} (${config.appName})` } : null;
   for (;;) {
