@@ -650,6 +650,8 @@ const columns = [
   ['team_messages', 'reply_to_id', 'INT UNSIGNED NULL', 'INTEGER'],
   ['team_messages', 'forwarded', 'TINYINT(1) NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
   ['team_messages', 'deleted_at', 'DATETIME NULL', 'TEXT'],
+  // The mailbox emails to the client about this ticket come from (for example info@), when an admin chose one.
+  ['tickets', 'send_from', 'VARCHAR(190) NULL', 'TEXT'],
 ];
 
 // Indexes added after the first release, created once on startup if missing: [table, index name, columns].

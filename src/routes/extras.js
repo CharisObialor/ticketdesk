@@ -328,6 +328,19 @@ router.post(
 
 // ---- System (admins): backups and email status ----
 
+// The default mailbox for emails to clients about tickets. Only a mailbox the admin can send from may be chosen.
+router.put(
+  '/system/client-mailbox',
+  requireAdmin,
+  wrap(async (req, res) => {
+    const cm = require('../client-mailbox');
+    const address = req.body && req.body.address ? String(req.body.address).trim().toLowerCase() : null;
+    if (address && !(await cm.optionsFor(req.user)).some((m) => m.address === address)) throw new HttpError(403, 'You do not have access to send from that mailbox');
+    await cm.setDefault(address);
+    res.json({ clientMailbox: cm.getDefault() });
+  })
+);
+
 router.get(
   '/system',
   requireAdmin,
@@ -342,6 +355,8 @@ router.get(
         provider: config.mailProvider === 'graph' && config.graph.clientId ? 'microsoft365' : config.smtp.host ? 'smtp' : 'none',
         mailbox: config.mailProvider === 'graph' ? config.graph.mailbox || null : config.smtp.user || null,
         sendAsStaff: mailer.configured() && config.mailProvider === 'graph' && config.graph.sendAsStaff ? config.graph.senderDomains : null,
+        // Emails to clients about tickets: the default mailbox they come from (tickets can choose their own).
+        clientMailbox: require('../client-mailbox').getDefault(),
         // Automatic emails: the system mailbox, and whether the delegate's access to it is confirmed right now.
         system: config.graph.systemMailbox
           ? { address: config.graph.systemMailbox, delegate: config.graph.systemDelegate, active: !!(await mailer.systemMailbox()) }

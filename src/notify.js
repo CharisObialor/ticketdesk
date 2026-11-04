@@ -1,4 +1,5 @@
 const config = require('./config');
+const clientMailbox = require('./client-mailbox');
 
 // "45 minutes", "1 hour 30 minutes", "2 days" (matches the portal's wording).
 function visitDuration(min) {
@@ -147,6 +148,8 @@ function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = f
     // Emails an admin triggers go out from their own mailbox (Microsoft 365); replies still come back to the ticket.
     // Agents and technicians send through the system mailbox.
     const sender = actor && actor.role === 'admin' ? { name: actor.name, email: actor.email } : undefined;
+    // Clients hear about their ticket from the ticket's mailbox (for example info@) when one is set.
+    const mailbox = ticket && r.role === 'client' ? clientMailbox.forTicket(ticket) : null;
     const design = {
       icon: content.icon || (kind === 'status' && ticket ? statusIcon(ticket.status) : KIND_ICON[kind]),
       status: ticket ? ticket.status : undefined,
@@ -165,6 +168,7 @@ function sendEach(recipients, actor, build, { ticket, ticketId, includeActor = f
       sender,
       // Nobody triggered it (auto-close, a rule, a sign-off finishing): it comes from the system mailbox.
       system: !actor || actor.role === 'system',
+      mailbox: mailbox || undefined,
       replyTo: reply || undefined,
       unsubscribeUrl: unsubscribeUrl(r.id),
       ...mailer.render({ ...design, ...content, replyable: !!reply, unsubscribeUrl: unsubscribeUrl(r.id) }),
@@ -294,6 +298,7 @@ module.exports = {
         subject: subjectFor(t),
         ticketId: t.id,
         sender: { name: actor.name, email: actor.email },
+        mailbox: clientMailbox.forTicket(t) || undefined,
         replyTo: ticketReplyAddress(t.id) || undefined,
         attachments: attach.map((f) => ({ filename: f.originalname, path: path.join(uploadsDir, path.basename(f.filename)), contentType: f.mimetype })),
         html,

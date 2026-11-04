@@ -80,6 +80,8 @@ module.exports = {
     // Automatic emails (reminders, SLA alerts, digests, statements, account emails) go out from this shared mailbox,
     // as long as the delegate has Full Access to it in Exchange. Otherwise they use the support mailbox.
     systemMailbox: (env.MS_SYSTEM_MAILBOX || '').trim().toLowerCase(),
+    // Default mailbox for emails to clients about tickets (for example info@); the System page can override it.
+    clientMailbox: (env.MS_CLIENT_MAILBOX || '').trim().toLowerCase(),
     systemDelegate: (env.MS_SYSTEM_DELEGATE || env.OWNER_EMAIL || 'charis.obialor@dateheight.com').trim().toLowerCase(),
   },
   smtp: {

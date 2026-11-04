@@ -49,6 +49,7 @@ async function main() {
   await require('./src/escalation').load();
   await require('./src/push').load();
   await require('./src/replyto').loadEpoch();
+  await require('./src/client-mailbox').load();
   await seedAdmin();
 
   const app = express();

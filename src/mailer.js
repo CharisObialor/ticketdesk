@@ -73,13 +73,15 @@ async function systemMailbox() {
 
 // One delivery attempt. If Microsoft refuses to send as the staff member (or the system mailbox), it goes from the
 // support mailbox instead.
-async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId, replyTo, sender, system, unsubscribeUrl }) {
+async function deliver({ to, cc, bcc, attachments, subject, html, text, ticketId, replyTo, sender, system, mailbox: from, unsubscribeUrl }) {
   if (config.emailOff) {
     console.log(`[mail:local] not sent (copy on this computer) to=${to} subject="${subject}"`);
     return;
   }
   const own = system ? null : sendAsMailbox(sender);
-  let via = system ? await systemMailbox() : own ? { address: own, name: `${sender.name} (${config.appName})` } : null;
+  // A ticket's client mailbox (for example info@) wins over the acting admin's own mailbox.
+  const chosen = from && useGraph() && (sendAsBlocked.get(from) || 0) <= Date.now() ? { address: from, name: config.appName } : null;
+  let via = chosen || (system ? await systemMailbox() : own ? { address: own, name: `${sender.name} (${config.appName})` } : null);
   for (;;) {
     const mailbox = via ? via.address : null;
     try {

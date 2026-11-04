@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../db');
 const notify = require('../notify');
 const realtime = require('../realtime');
+const clientMailbox = require('../client-mailbox');
 const transcript = require('../transcript');
 const signoff = require('../signoff');
 const sla = require('../sla');
@@ -214,6 +215,32 @@ router.post(
 
     const t = await svc.createTicket({ actor: u, companyId, createdBy, subject, body, category, priority, contacts, siteId: site && site.id, files: req.files });
     res.status(201).json({ ticket: t });
+  })
+);
+
+// Mailboxes the signed-in admin can send client emails from, and the portal-wide default.
+router.get(
+  '/mailbox-options',
+  wrap(async (req, res) => {
+    if (req.user.role !== 'admin') throw new HttpError(403, 'Admins only');
+    res.json({ default: clientMailbox.getDefault(), options: await clientMailbox.optionsFor(req.user) });
+  })
+);
+
+// Which mailbox emails to the client about this ticket come from (null: the portal-wide default).
+router.put(
+  '/:id/mailbox',
+  wrap(async (req, res) => {
+    if (req.user.role !== 'admin') throw new HttpError(403, 'Admins only');
+    const t = await loadTicket(req);
+    const address = req.body && req.body.address ? String(req.body.address).trim().toLowerCase() : null;
+    if (address && !(await clientMailbox.optionsFor(req.user)).some((m) => m.address === address)) {
+      throw new HttpError(403, 'You do not have access to send from that mailbox');
+    }
+    await db.query('UPDATE tickets SET send_from = ? WHERE id = ?', [address, t.id]);
+    const ticket = await svc.getTicket(t.id);
+    realtime.toTicket(t, 'ticket:update', { ticket });
+    res.json({ ticket });
   })
 );
 

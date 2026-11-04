@@ -8,6 +8,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PageHeader } from '@/components/common';
+import { MailboxSelect } from '@/components/client-mailbox';
 import { DeleteForeverDialog } from '@/components/delete-forever-dialog';
 import { useSession } from '@/hooks/use-session';
 import { DefaultSlaCard } from '@/components/sla-editor';
@@ -21,7 +22,7 @@ interface SystemInfo {
   lastBackup: { ok: boolean; reason: string; name?: string; error?: string; finished_at: string; filesCopied?: number } | null;
   backupHour: number;
   backupKeep: number;
-  email: { outgoing: boolean; provider: 'microsoft365' | 'smtp' | 'none'; mailbox: string | null; sendAsStaff: string[] | null; system: { address: string; delegate: string; active: boolean } | null; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
+  email: { outgoing: boolean; provider: 'microsoft365' | 'smtp' | 'none'; mailbox: string | null; clientMailbox?: string | null; sendAsStaff: string[] | null; system: { address: string; delegate: string; active: boolean } | null; inbound: { enabled: boolean; address: string | null; lastRunAt: string | null; lastError: string | null; processed: number } };
   autoCloseDays: number;
   chatDigestMinutes: number;
   sessionIdleMinutes: number;
@@ -228,8 +229,42 @@ export default function SystemPage() {
         </CardContent>
       </Card>
 
+      {s.email.provider === 'microsoft365' && <ClientMailboxCard current={s.email.clientMailbox ?? null} />}
+
       <ClearTicketsCard />
     </>
+  );
+}
+
+// Which mailbox emails to clients about tickets come from by default (each ticket can choose its own).
+function ClientMailboxCard({ current }: { current: string | null }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  async function change(address: string | null) {
+    setBusy(true);
+    try {
+      await api.put('/system/client-mailbox', { address });
+      await Promise.all([qc.invalidateQueries({ queryKey: ['system'] }), qc.invalidateQueries({ queryKey: ['mailbox-options'] })]);
+      toast.success(address ? `Client emails now come from ${address}` : 'Client emails now come from the admin who acts');
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="type-h5">Emails to clients</CardTitle>
+        <CardDescription>
+          The mailbox that new ticket confirmations, replies and status updates to clients come from. Each ticket can choose a different one under
+          Details. Emails to staff and automatic reminders are not affected.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="max-w-md">
+        <MailboxSelect value={current} onChange={change} busy={busy} defaultLabel="The admin who acts (their own mailbox)" />
+      </CardContent>
+    </Card>
   );
 }
 

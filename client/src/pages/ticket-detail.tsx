@@ -91,6 +91,7 @@ import { AdminRatingsCard, RatingCard, StaffAdminRatingsCard, StaffRatingCard, t
 import { VisitsCard } from '@/components/visits';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
+import { TicketMailbox } from '@/components/client-mailbox';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo, signoffMessage } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -1236,7 +1237,7 @@ function DetailsCard({
   busy: boolean;
   timeSpent: number;
 }) {
-  const { app } = useSession();
+  const { app, isAdmin } = useSession();
   const staff = useQuery({
     queryKey: ['staff'],
     queryFn: () => api.get<{ staff: StaffMember[] }>('/staff'),
@@ -1346,6 +1347,11 @@ function DetailsCard({
                 </SelectContent>
               </Select>
             </DetailRow>
+            {isAdmin && (
+              <DetailRow label="Client emails from">
+                <TicketMailbox ticketId={t.id} value={t.send_from ?? null} />
+              </DetailRow>
+            )}
             {dirty && (
               <div className="flex items-center justify-end gap-2 rounded-md bg-muted/50 p-2">
                 <span className="mr-auto text-xs text-muted-foreground">

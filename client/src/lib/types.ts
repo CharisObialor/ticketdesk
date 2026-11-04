@@ -78,6 +78,8 @@ export interface CompanySla {
 export interface Ticket {
   id: number;
   company_id: number;
+  // The mailbox the client's emails about this ticket come from, when an admin chose one.
+  send_from?: string | null;
   company_name: string;
   created_by: number | null;
   creator_name: string | null;
