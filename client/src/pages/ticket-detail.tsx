@@ -93,7 +93,7 @@ import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
 import { TicketMailbox } from '@/components/client-mailbox';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo, signoffMessage } from '@/lib/format';
+import { isStaffRole, OPEN_STATUSES, PRIORITY_LABELS, STATUS_LABELS, duration, fileSize, formatDateTime, parseTs, timeAgo, signoffMessage, ticketRef } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Attachment, Message, Priority, Rating, ReadReceipt, SavedReply, SignoffState, StaffMember, Status, Ticket, Transcript, Visit } from '@/lib/types';
 import { fillPlaceholders } from '@/lib/placeholders';
@@ -188,7 +188,7 @@ export default function TicketDetailPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span className="font-mono">#{t.id}</span>
+              <span className="font-mono">{ticketRef(t)}</span>
               <span>·</span>
               <span>{t.company_name}</span>
               <span>·</span>
@@ -377,11 +377,11 @@ function TicketActions({
       )}
       {deleteOpen && (
         <DeleteForeverDialog
-          title={`Delete ticket #${t.id}`}
+          title={`Delete ticket ${ticketRef(t)}`}
           onClose={() => setDeleteOpen(false)}
           onConfirm={async () => {
             await api.delete(`/tickets/${t.id}`);
-            toast.success(`Ticket #${t.id} was deleted`);
+            toast.success(`Ticket ${ticketRef(t)} was deleted`);
             qc.removeQueries({ queryKey: ['ticket', t.id] });
             qc.invalidateQueries({ queryKey: ['tickets'] });
             navigate('/tickets', { replace: true });
@@ -412,7 +412,7 @@ function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: ()
   const send = useMutation({
     mutationFn: () => api.post<{ sentTo: string[] }>(`/tickets/${t.id}/email`, { to, cc, note }),
     onSuccess: (r) => {
-      toast.success(`Ticket #${t.id} sent to ${r.sentTo.length} ${r.sentTo.length === 1 ? 'person' : 'people'}`);
+      toast.success(`Ticket ${ticketRef(t)} sent to ${r.sentTo.length} ${r.sentTo.length === 1 ? 'person' : 'people'}`);
       qc.invalidateQueries({ queryKey: ['ticket', t.id] });
       onClose();
     },
@@ -430,7 +430,7 @@ function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: ()
           }}
         >
           <DialogHeader>
-            <DialogTitle>Email ticket #{t.id}</DialogTitle>
+            <DialogTitle>Email ticket {ticketRef(t)}</DialogTitle>
             <DialogDescription>
               Sends the ticket details and the conversation, with the full transcript attached, from your mailbox. Internal notes are never included.
             </DialogDescription>
@@ -1369,7 +1369,7 @@ function DetailsCard({
             <AlertDialog open={confirming} onOpenChange={setConfirming}>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Save changes to ticket #{t.id}?</AlertDialogTitle>
+                  <AlertDialogTitle>Save changes to ticket {ticketRef(t)}?</AlertDialogTitle>
                   <AlertDialogDescription>
                     {draft.status === 'resolved' && saved.status !== 'resolved'
                       ? 'The ticket will be resolved after sign-off by the other admins. Until then it keeps its current status, and the client is told once it is signed off. A new assignee is notified.'

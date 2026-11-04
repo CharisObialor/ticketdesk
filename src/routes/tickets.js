@@ -12,7 +12,7 @@ const { upload, workUpload, messageUpload, cleanup } = require('../uploads');
 const { requireAuth, requireStaff, requireAdmin, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
 const mailer = require('../mailer');
 const { signatureFor, avatarUrl } = require('../email-template');
-const { wrap, now, parseTs, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, STATUS_LABELS } = require('../util');
+const { wrap, now, parseTs, HttpError, STATUSES, OPEN_STATUSES, PRIORITIES, STATUS_LABELS, ticketRef } = require('../util');
 const config = require('../config');
 
 router.use(requireAuth);
@@ -100,15 +100,15 @@ router.get(
     const q = clean(req.query.q, 100);
     if (q) {
       if (/^#?\d+$/.test(q)) {
-        where.push('t.id = ?');
-        params.push(Number(q.replace('#', '')));
+        where.push('(t.id = ? OR t.ref = ?)');
+        params.push(Number(q.replace('#', '')), q);
       } else {
         // Also matches text inside the conversation (internal notes only for staff).
         where.push(
-          `(t.subject LIKE ? OR c.name LIKE ? OR cu.name LIKE ? OR EXISTS (
+          `(t.ref = ? OR t.subject LIKE ? OR c.name LIKE ? OR cu.name LIKE ? OR EXISTS (
              SELECT 1 FROM messages sm WHERE sm.ticket_id = t.id AND sm.kind = 'message' ${staff ? '' : 'AND sm.is_internal = 0'} AND sm.body LIKE ?))`
         );
-        params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+        params.push(q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
       }
     }
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -617,7 +617,7 @@ router.post(
       .join('\n\n');
     const u = req.user;
     const { html, text } = mailer.render({
-      heading: `Ticket #${t.id}: ${t.subject}`,
+      heading: `Ticket ${ticketRef(t)}: ${t.subject}`,
       icon: 'ticket',
       status: t.status,
       greeting: 'Dear colleague,',
@@ -641,7 +641,7 @@ router.post(
     mailer.send({
       to: to.join(', '),
       cc,
-      subject: `Ticket #${t.id}: ${t.subject}`,
+      subject: `Ticket ${ticketRef(t)}: ${t.subject}`,
       html,
       text,
       sender: u,

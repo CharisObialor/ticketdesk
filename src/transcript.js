@@ -1,5 +1,5 @@
 const config = require('./config');
-const { escapeHtml, parseTs, now, STATUS_LABELS } = require('./util');
+const { ticketRef, escapeHtml, parseTs, now, STATUS_LABELS } = require('./util');
 
 const fmt = (s) => (s ? parseTs(s).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '-');
 const author = (m) => (m.kind === 'system' ? 'System' : m.user_name || 'Deleted user');
@@ -8,7 +8,7 @@ const sizeKb = (n) => `${Math.max(1, Math.round(n / 1024))} KB`;
 
 function header(t) {
   return [
-    ['Ticket', `#${t.id} - ${t.subject}`],
+    ['Ticket', `${ticketRef(t)} - ${t.subject}`],
     ['Company', t.company_name],
     ['Requester', t.creator_name || '-'],
     ['Assigned to', t.assignee_name || 'Unassigned'],
@@ -72,7 +72,7 @@ function toHtml(t, messages, { includeInternal = false } = {}) {
       }<span>${fmt(m.created_at)}</span></div><div class="b">${escapeHtml(m.body)}</div>${files ? `<ul>${files}</ul>` : ''}</div>`;
     })
     .join('');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Ticket #${t.id} transcript</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Ticket ${ticketRef(t)} transcript</title>
 <style>
 body{font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111827;max-width:820px;margin:24px auto;padding:0 16px}
 h1{font-size:20px;margin:0 0 4px}.sub{color:#6b7280;margin:0 0 16px}
@@ -84,7 +84,7 @@ table{border-collapse:collapse;margin-bottom:20px}th{text-align:left;color:#6b72
 .sys .h{justify-content:center}.sys .h span{margin-left:8px}.sys .h b{font-weight:500}
 .b{white-space:pre-wrap;word-wrap:break-word}ul{margin:6px 0 0;padding-left:18px;font-size:13px}ul span{color:#6b7280}
 </style></head><body>
-<h1>Ticket #${t.id}: ${escapeHtml(t.subject)}</h1>
+<h1>Ticket ${ticketRef(t)}: ${escapeHtml(t.subject)}</h1>
 <p class="sub">${escapeHtml(config.appName)} · transcript exported ${fmt(now())}</p>
 <table>${rows}</table>${items}</body></html>`;
 }

@@ -3,6 +3,10 @@ import type { Priority, Status } from './types';
 // The server stores UTC timestamps as 'YYYY-MM-DD HH:MM:SS' and dates as 'YYYY-MM-DD'; some values arrive as full
 // ISO strings. Each shape is read explicitly: Safari (iPhone) rejects anything loose, such as '2026-10-01Z'.
 // Returns null for anything that is not a real date, so callers never format an invalid one.
+// A ticket's ID as people see it: the company's own (PAT-0001) when it has one, otherwise #123.
+export const ticketRef = (t: { id: number; ref?: string | null }): string => t.ref || `#${t.id}`;
+export const ticketRefOf = (id: number, ref?: string | null) => ref || `#${id}`;
+
 export function parseTs(s: string | null | undefined): Date | null {
   if (!s) return null;
   const v = String(s).trim();

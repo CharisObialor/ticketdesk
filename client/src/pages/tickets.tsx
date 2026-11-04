@@ -39,7 +39,7 @@ import { EmptyState, Greeting, PageHeader } from '@/components/common';
 import { EscalatedBadge, PriorityBadge, ResolutionBadge, SlaBadge, StatusBadge } from '@/components/ticket-badges';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage, qs } from '@/lib/api';
-import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo, signoffMessage } from '@/lib/format';
+import { PRIORITY_LABELS, STATUS_LABELS, formatDateTime, timeAgo, signoffMessage, ticketRef } from '@/lib/format';
 import type { Company, Priority, Status, Ticket } from '@/lib/types';
 import { basename } from '@/lib/url-key';
 
@@ -82,7 +82,7 @@ export default function TicketsPage() {
   const change = async (t: Ticket, body: Record<string, unknown>, done: string) => {
     try {
       const r = await api.patch<{ signoffRequested?: { required: number } }>(`/tickets/${t.id}`, body);
-      if (r.signoffRequested) toast.info(`#${t.id} sent for sign-off`, { description: signoffMessage(r.signoffRequested.required) });
+      if (r.signoffRequested) toast.info(`${ticketRef(t)} sent for sign-off`, { description: signoffMessage(r.signoffRequested.required) });
       else toast.success(done);
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['counts'] });
@@ -267,7 +267,7 @@ export default function TicketsPage() {
                 <ContextMenu key={t.id}>
                   <ContextMenuTrigger asChild>
                     <TableRow className="cursor-pointer" onClick={() => navigate(`/tickets/${t.id}`)}>
-                      <TableCell className="pl-4 font-mono text-xs text-muted-foreground">#{t.id}</TableCell>
+                      <TableCell className="pl-4 font-mono text-xs text-muted-foreground">{ticketRef(t)}</TableCell>
                       <TableCell className="max-w-0">
                         <div className="flex items-center gap-2">
                           <Link to={`/tickets/${t.id}`} className="truncate font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
@@ -319,7 +319,7 @@ export default function TicketsPage() {
                       <Link2 />
                       Copy link
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => copy(`#${t.id} ${t.subject}`, 'Ticket number')}>
+                    <ContextMenuItem onClick={() => copy(`${ticketRef(t)} ${t.subject}`, 'Ticket number')}>
                       <Hash />
                       Copy number and subject
                     </ContextMenuItem>
@@ -327,7 +327,7 @@ export default function TicketsPage() {
                       <>
                         <ContextMenuSeparator />
                         {t.assigned_to !== user?.id && (
-                          <ContextMenuItem onClick={() => change(t, { assigned_to: user?.id }, `#${t.id} assigned to you`)}>
+                          <ContextMenuItem onClick={() => change(t, { assigned_to: user?.id }, `${ticketRef(t)} assigned to you`)}>
                             <UserCheck />
                             Assign to me
                           </ContextMenuItem>
@@ -341,7 +341,7 @@ export default function TicketsPage() {
                             {(Object.keys(STATUS_LABELS) as Status[])
                               .filter((s) => s !== t.status)
                               .map((s) => (
-                                <ContextMenuItem key={s} onClick={() => change(t, { status: s }, `#${t.id} is now ${STATUS_LABELS[s]}`)}>
+                                <ContextMenuItem key={s} onClick={() => change(t, { status: s }, `${ticketRef(t)} is now ${STATUS_LABELS[s]}`)}>
                                   {STATUS_LABELS[s]}
                                 </ContextMenuItem>
                               ))}
@@ -356,7 +356,7 @@ export default function TicketsPage() {
                             {(Object.keys(PRIORITY_LABELS) as Priority[])
                               .filter((p) => p !== t.priority)
                               .map((p) => (
-                                <ContextMenuItem key={p} onClick={() => change(t, { priority: p }, `#${t.id} priority set to ${PRIORITY_LABELS[p]}`)}>
+                                <ContextMenuItem key={p} onClick={() => change(t, { priority: p }, `${ticketRef(t)} priority set to ${PRIORITY_LABELS[p]}`)}>
                                   {PRIORITY_LABELS[p]}
                                 </ContextMenuItem>
                               ))}

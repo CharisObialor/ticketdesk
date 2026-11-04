@@ -10,7 +10,7 @@ const config = require('../config');
 const ticketsSvc = require('../services/tickets');
 const { messageUpload, cleanup, uploadsDir, INLINE } = require('../uploads');
 const { requireAuth, isStaff, canAccessTicket, STAFF_ROLES } = require('../auth');
-const { wrap, now, HttpError } = require('../util');
+const { wrap, now, HttpError, ticketRef } = require('../util');
 
 router.use(requireAuth);
 
@@ -199,7 +199,7 @@ router.get(
     // Unread counts only apply to tickets this user is following: ones they have opened, or that are theirs.
     const internal = staff ? '' : 'AND tm.is_internal = 0';
     const tickets = await db.query(
-      `SELECT t.id, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, c.logo AS company_logo, t.last_activity_at,
+      `SELECT t.id, t.ref, t.subject, t.status, t.priority, t.escalated, t.company_id, c.name AS company_name, c.logo AS company_logo, t.last_activity_at,
         (SELECT tm.body FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_body,
         (SELECT tm.kind FROM messages tm WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_kind,
         (SELECT ${staff ? 'lu.name' : `CASE WHEN lu.role = 'technician' OR tm.kind = 'work_update' THEN '${privacy.TEAM}' ELSE lu.name END`} FROM messages tm LEFT JOIN users lu ON lu.id = tm.user_id WHERE tm.ticket_id = t.id ${internal} ORDER BY tm.id DESC LIMIT 1) AS last_user,
@@ -234,7 +234,7 @@ router.get(
         id: t.id,
         title: t.subject,
         image: companyLogo(t),
-        subtitle: `#${t.id} · ${t.company_name}`,
+        subtitle: `${ticketRef(t)} · ${t.company_name}`,
         company_name: t.company_name,
         status: t.status,
         escalated: !!Number(t.escalated),

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useSession } from '@/hooks/use-session';
 import type { ChatGroup, ChatMember, ChatMessage, Message, PinnedMessage, Presence, ReadReceipt, Role, Ticket } from '@/lib/types';
 import { API_BASE } from '@/lib/api';
+import { ticketRef } from '@/lib/format';
 
 interface TicketData {
   ticket: Ticket;
@@ -101,7 +102,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('ticket:new', ({ ticket }: { ticket: Ticket }) => {
       refreshLists();
       if (isStaff && ticket.created_by !== user.id) {
-        toast.info(`New ticket #${ticket.id}`, { description: `${ticket.company_name}: ${ticket.subject}` });
+        toast.info(`New ticket ${ticketRef(ticket)}`, { description: `${ticket.company_name}: ${ticket.subject}` });
       }
     });
     // The owner cleared every ticket: drop everything held about tickets and load afresh.
@@ -117,7 +118,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('ticket:escalated', ({ ticket }: { ticket: Ticket }) => {
       putTicket(ticket);
       refreshLists();
-      toast.warning(`Ticket #${ticket.id} escalated`, { description: ticket.subject });
+      toast.warning(`Ticket ${ticketRef(ticket)} escalated`, { description: ticket.subject });
     });
     socket.on('typing', ({ ticketId, userId, name, typing: on }: { ticketId: number; userId: number; name: string; typing: boolean }) => {
       setTyping((t) => setTypingEntry(t, ticketId, userId, on ? name : null));

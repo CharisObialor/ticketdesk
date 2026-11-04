@@ -1,4 +1,8 @@
 // UTC timestamp in 'YYYY-MM-DD HH:MM:SS' form - stored identically in MySQL and SQLite.
+// A ticket's ID as people see it: the company's own (PAT-0001) when it has one, otherwise #123.
+const ticketRef = (t) => (t && t.ref) || `#${t && (t.id ?? t.ticket_id)}`;
+const ticketRefOf = (id, ref) => ref || `#${id}`;
+
 function now(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
@@ -60,6 +64,8 @@ const STATUS_LABELS = {
 };
 
 module.exports = {
+  ticketRef,
+  ticketRefOf,
   now,
   parseTs,
   HttpError,

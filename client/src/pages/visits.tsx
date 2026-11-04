@@ -15,7 +15,7 @@ import { DropZone, FileChips, useFileList } from '@/components/file-attachments'
 import { ScheduleVisitDialog, SignaturePad, VisitStatusBadge, formatVisitTime } from '@/components/visits';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { formatDateTime, parseTs, visitDuration } from '@/lib/format';
+import { formatDateTime, parseTs, visitDuration, ticketRefOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Visit } from '@/lib/types';
 
@@ -101,7 +101,7 @@ export default function VisitsPage() {
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-medium">{v.company_name}</div>
                           <div className="truncate text-sm text-muted-foreground">
-                            #{v.ticket_id} {v.ticket_subject}
+                            {ticketRefOf(v.ticket_id, v.ticket_ref)} {v.ticket_subject}
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                             <span className="flex items-center gap-1">
@@ -179,7 +179,7 @@ export function VisitDetailPage() {
         title={`Site visit: ${v.company_name}`}
         description={
           <Link to={`/tickets/${v.ticket_id}`} className="inline-flex items-center gap-1 hover:underline">
-            <TicketIcon className="size-3.5" />#{v.ticket_id} {v.ticket_subject}
+            <TicketIcon className="size-3.5" />{ticketRefOf(v.ticket_id, v.ticket_ref)} {v.ticket_subject}
           </Link>
         }
         actions={<VisitStatusBadge status={v.status} />}

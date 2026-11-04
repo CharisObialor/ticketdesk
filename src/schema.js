@@ -652,6 +652,12 @@ const columns = [
   ['team_messages', 'deleted_at', 'DATETIME NULL', 'TEXT'],
   // The mailbox emails to the client about this ticket come from (for example info@), when an admin chose one.
   ['tickets', 'send_from', 'VARCHAR(190) NULL', 'TEXT'],
+  // Company ticket IDs such as PAT-0001: the company's prefix, zero-padded width and next number, and each ticket's
+  // ID (fixed when it is created). Companies without them keep plain #123 numbers.
+  ['companies', 'ticket_prefix', 'VARCHAR(20) NULL', 'TEXT'],
+  ['companies', 'ticket_pad', 'TINYINT UNSIGNED NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0'],
+  ['companies', 'ticket_next', 'INT UNSIGNED NULL', 'INTEGER'],
+  ['tickets', 'ref', 'VARCHAR(40) NULL', 'TEXT'],
 ];
 
 // Indexes added after the first release, created once on startup if missing: [table, index name, columns].
@@ -674,6 +680,8 @@ const indexes = [
   ['mail_outbox', 'idx_mo_sent', 'status, sent_at'],
   // Tickets per site, for the company site list.
   ['tickets', 'idx_t_site', 'site_id'],
+  // Finding a ticket by its company ticket ID (search, replies by email).
+  ['tickets', 'idx_t_ref', 'ref'],
 ];
 
 module.exports = { mysql, sqlite, columns, indexes };

@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { ROLE_LABELS, parseTs, VISIT_DURATIONS, visitDuration } from '@/lib/format';
+import { ROLE_LABELS, parseTs, VISIT_DURATIONS, visitDuration, ticketRef } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { ClientVisitActions } from '@/components/client-visit';
 import type { StaffMember, Ticket, Visit, VisitStatus } from '@/lib/types';
@@ -87,7 +87,7 @@ export function ScheduleVisitDialog({ ticket, visit, onClose }: { ticket: Pick<T
           <DialogHeader>
             <DialogTitle>{visit ? 'Reschedule site visit' : 'Schedule a site visit'}</DialogTitle>
             <DialogDescription>
-              Ticket #{ticket.id} for {ticket.company_name}. The technician and the client are emailed the details.
+              Ticket {ticketRef(ticket)} for {ticket.company_name}. The technician and the client are emailed the details.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">

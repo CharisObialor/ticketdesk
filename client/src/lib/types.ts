@@ -80,6 +80,8 @@ export interface Ticket {
   company_id: number;
   // The mailbox the client's emails about this ticket come from, when an admin chose one.
   send_from?: string | null;
+  // The company's own ticket ID (PAT-0001), when the company has ticket numbering set up.
+  ref?: string | null;
   company_name: string;
   created_by: number | null;
   creator_name: string | null;
@@ -165,6 +167,7 @@ export type VisitStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled
 export interface Visit {
   id: number;
   ticket_id: number;
+  ticket_ref?: string | null;
   technician_id: number | null;
   technician_name: string | null;
   technician_phone?: string | null;
@@ -211,6 +214,7 @@ export interface SavedReply {
 export interface Transcript {
   id: number;
   ticket_id: number;
+  ticket_ref?: string | null;
   filename: string;
   size: number;
   message_count: number;
@@ -262,6 +266,10 @@ export interface Site {
 export interface Company {
   id: number;
   name: string;
+  // Ticket IDs: prefix, zero-padded width and the next number (see the company form).
+  ticket_prefix?: string | null;
+  ticket_pad?: number | null;
+  ticket_next?: number | null;
   // Client contacts who receive the monthly statement.
   statement_recipients?: number[];
   // Asks for the site's OM and FSE on each new ticket.
@@ -408,7 +416,7 @@ export interface Metrics {
     avgRating: number | null;
   };
   ratingBreakdown: { rating: number; total: number }[];
-  recentRatings: { ticket_id: number; rating: number; comment: string | null; updated_at: string; user_name: string | null; company_name: string; subject: string }[];
+  recentRatings: { ticket_id: number; ticket_ref?: string | null; rating: number; comment: string | null; updated_at: string; user_name: string | null; company_name: string; subject: string }[];
   // How clients rated each admin's handling of jobs in the period.
   adminRatings?: { id: number; name: string; ratings: number; avgRating: number; low: number }[];
   status: Partial<Record<Status, number>>;

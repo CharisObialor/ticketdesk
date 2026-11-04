@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, PageHeader } from '@/components/common';
 import { api, qs } from '@/lib/api';
-import { fileSize, formatDateTime } from '@/lib/format';
+import { fileSize, formatDateTime, ticketRefOf } from '@/lib/format';
 import type { Transcript } from '@/lib/types';
 import { apiHref } from '@/lib/api';
 
@@ -64,7 +64,7 @@ export default function TranscriptsPage() {
                 <TableRow key={tr.id}>
                   <TableCell className="pl-4 font-mono text-xs">
                     <Link to={`/tickets/${tr.ticket_id}`} className="text-muted-foreground hover:text-foreground hover:underline">
-                      #{tr.ticket_id}
+                      {ticketRefOf(tr.ticket_id, tr.ticket_ref)}
                     </Link>
                   </TableCell>
                   <TableCell className="max-w-0">

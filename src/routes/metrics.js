@@ -87,7 +87,7 @@ async function build(range) {
     db.query(`${TICKET_SELECT} ORDER BY t.last_activity_at DESC LIMIT 8`),
   ]);
   const ratings = await db.query(
-    `SELECT r.ticket_id, r.rating, r.comment, r.updated_at, u.name AS user_name, c.name AS company_name, t.subject, t.assigned_to
+    `SELECT r.ticket_id, t.ref AS ticket_ref, r.rating, r.comment, r.updated_at, u.name AS user_name, c.name AS company_name, t.subject, t.assigned_to
      FROM ticket_ratings r JOIN tickets t ON t.id = r.ticket_id JOIN companies c ON c.id = t.company_id
      LEFT JOIN users u ON u.id = r.user_id WHERE r.updated_at >= ? AND r.updated_at < ? ORDER BY r.updated_at DESC`,
     [since, until]

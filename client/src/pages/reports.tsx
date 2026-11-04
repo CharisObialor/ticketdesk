@@ -29,7 +29,7 @@ import { PriorityBadge, StatusBadge } from '@/components/ticket-badges';
 import { Stars } from '@/components/rating';
 import { api, errorMessage } from '@/lib/api';
 import { BRAND } from '@/lib/brand';
-import { PRIORITY_LABELS, STATUS_LABELS, duration, formatDate, formatDateTime } from '@/lib/format';
+import { PRIORITY_LABELS, STATUS_LABELS, duration, formatDate, formatDateTime, ticketRef, ticketRefOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Company, Priority, Status } from '@/lib/types';
 
@@ -91,9 +91,9 @@ interface Report {
   // How this company's people rated each of our admins.
   adminRatings?: { name: string; ratings: number; avgRating: number }[];
   ratingBreakdown: { rating: number; total: number }[];
-  ratings: { ticket_id: number; rating: number; comment: string | null; updated_at: string; user_name: string | null; subject: string }[];
+  ratings: { ticket_id: number; ticket_ref?: string | null; rating: number; comment: string | null; updated_at: string; user_name: string | null; subject: string }[];
   openNow: { id: number; subject: string; priority: Priority; status: Status; escalated: number; created_at: string; assignee: string | null; ageDays: number }[];
-  visits: { id: number; ticket_id: number; scheduled_at: string; location: string | null; status: string; technician: string | null; subject: string; signed_by: string | null }[];
+  visits: { id: number; ticket_id: number; ticket_ref?: string | null; scheduled_at: string; location: string | null; status: string; technician: string | null; subject: string; signed_by: string | null }[];
   people: { id: number; name: string; email: string; job_title: string | null; phone: string | null; is_active: number; last_login_at: string | null }[];
   tickets: ReportTicket[];
 }
@@ -135,7 +135,7 @@ function toCsv(r: Report) {
     [],
     ['Ticket', 'Subject', 'Requester', 'Position', 'Category', 'Priority', 'Status', 'Escalated', 'Raised', 'First response', 'Resolved', 'Resolution time', 'Handled by'],
     ...r.tickets.map((t) => [
-      `#${t.id}`,
+      `${ticketRef(t)}`,
       t.subject,
       t.requester ?? '',
       t.requester_title ?? '',
@@ -432,7 +432,7 @@ function ReportView({ r }: { r: Report }) {
                       </div>
                       <p className="mt-1">&ldquo;{x.comment}&rdquo;</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {x.user_name ?? 'Client'} on #{x.ticket_id} {x.subject}
+                        {x.user_name ?? 'Client'} on {ticketRefOf(x.ticket_id, x.ticket_ref)} {x.subject}
                       </p>
                     </li>
                   ))}
@@ -481,7 +481,7 @@ function ReportView({ r }: { r: Report }) {
                 <TableRow key={t.id}>
                   <TableCell className="max-w-80">
                     <Link to={`/tickets/${t.id}`} className="block truncate font-medium hover:underline">
-                      #{t.id} {t.subject}
+                      {ticketRef(t)} {t.subject}
                     </Link>
                   </TableCell>
                   <TableCell>
@@ -519,7 +519,7 @@ function ReportView({ r }: { r: Report }) {
                 <TableRow key={v.id}>
                   <TableCell className="whitespace-nowrap">{formatDateTime(v.scheduled_at)}</TableCell>
                   <TableCell className="max-w-64 truncate">
-                    #{v.ticket_id} {v.subject}
+                    {ticketRefOf(v.ticket_id, v.ticket_ref)} {v.subject}
                   </TableCell>
                   <TableCell>{v.technician ?? '-'}</TableCell>
                   <TableCell className="max-w-48 truncate">{v.location ?? '-'}</TableCell>
@@ -587,7 +587,7 @@ function ReportView({ r }: { r: Report }) {
                 <TableRow key={t.id}>
                   <TableCell className="max-w-72">
                     <Link to={`/tickets/${t.id}`} className="block truncate font-medium hover:underline">
-                      #{t.id} {t.subject}
+                      {ticketRef(t)} {t.subject}
                     </Link>
                     <span className="text-xs text-muted-foreground">{t.category}</span>
                   </TableCell>

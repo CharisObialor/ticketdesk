@@ -55,7 +55,7 @@ import { useRealtime, type GroupData } from '@/hooks/use-realtime';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { useSession } from '@/hooks/use-session';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo } from '@/lib/format';
+import { ROLE_LABELS, formatDateTime, formatTime, isStaffRole, parseTs, timeAgo, ticketRef } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { ChatItem, ChatMessage, Company, ConversationImage, Role } from '@/lib/types';
 import { Attachments, Composer, EditBox, Thread, type TicketData } from '@/pages/ticket-detail';
@@ -1035,7 +1035,7 @@ function TicketPane({ ticketId }: { ticketId: number }) {
         icon={TicketIcon}
         image={inboxImage('ticket', t.id)}
         title={t.subject}
-        subtitle={`#${t.id} · ${t.company_name}`}
+        subtitle={`${ticketRef(t)} · ${t.company_name}`}
         actions={
           <>
             <StatusBadge status={t.status} className="hidden sm:inline-flex" />

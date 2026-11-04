@@ -122,7 +122,7 @@ router.delete(
 
 // ---- Site visits ----
 
-const VISIT_SELECT = `SELECT v.*, u.name AS technician_name, u.phone AS technician_phone, t.subject AS ticket_subject, t.company_id,
+const VISIT_SELECT = `SELECT v.*, u.name AS technician_name, u.phone AS technician_phone, t.subject AS ticket_subject, t.ref AS ticket_ref, t.company_id,
   c.name AS company_name, cu.name AS requester_name
   FROM site_visits v
   JOIN tickets t ON t.id = v.ticket_id

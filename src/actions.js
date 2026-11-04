@@ -6,7 +6,7 @@ const db = require('./db');
 const backup = require('./backup');
 const inbound = require('./inbound');
 const { STAFF_ROLES } = require('./auth');
-const { now, parseTs, OPEN_STATUSES } = require('./util');
+const { ticketRef, ticketRefOf, now, parseTs, OPEN_STATUSES } = require('./util');
 
 const SEVERITY_RANK = { urgent: 0, high: 1, normal: 2 };
 const minutesSince = (ts) => (Date.now() - parseTs(ts).getTime()) / 60000;
@@ -34,7 +34,7 @@ async function computeActions() {
   );
   const load = await staffLoad();
   const lightest = load[0];
-  const ref = (t) => `#${t.id} ${t.subject} (${t.company_name})`;
+  const ref = (t) => `${ticketRef(t)} ${t.subject} (${t.company_name})`;
 
   for (const t of tickets) {
     const link = `/tickets/${t.id}`;
@@ -176,7 +176,7 @@ async function computeActions() {
 
   // 6. Site visits whose time has passed without a report.
   const visits = await db.query(
-    `SELECT v.*, u.name AS technician_name, t.subject, c.name AS company_name FROM site_visits v
+    `SELECT v.*, u.name AS technician_name, t.subject, t.ref AS ticket_ref, c.name AS company_name FROM site_visits v
      JOIN tickets t ON t.id = v.ticket_id JOIN companies c ON c.id = t.company_id LEFT JOIN users u ON u.id = v.technician_id
      WHERE v.status IN ('scheduled', 'in_progress')`
   );
@@ -188,7 +188,7 @@ async function computeActions() {
       type: 'visit',
       category: 'visits',
       severity: overMin > 1440 ? 'high' : 'normal',
-      title: `Site visit report missing: ${v.company_name}, ticket #${v.ticket_id}`,
+      title: `Site visit report missing: ${v.company_name}, ticket ${ticketRefOf(v.ticket_id, v.ticket_ref)}`,
       detail: `${v.technician_name || 'Unassigned'} was due on site ${ago(minutesSince(v.scheduled_at))} ago; the visit is still ${v.status === 'in_progress' ? 'in progress' : 'not started'}.`,
       suggestion: `Ask ${v.technician_name || 'the technician'} to complete the visit report, or reschedule or cancel it.`,
       since: v.scheduled_at,
@@ -212,7 +212,7 @@ async function computeActions() {
       type: 'signoff',
       category: 'tickets',
       severity: waited > 1440 ? 'high' : 'normal',
-      title: `Sign-off needed: ticket #${t.id} ${t.subject}`,
+      title: `Sign-off needed: ticket ${ticketRef(t)} ${t.subject}`,
       detail: `${t.requester || 'A team member'} marked it resolved ${ago(waited)} ago for ${t.company_name}. ${approved} of ${t.signoff_required} approvals so far.`,
       suggestion: 'Check the resolution, then approve it or send it back with a reason.',
       since: t.signoff_requested_at,
@@ -224,7 +224,7 @@ async function computeActions() {
 
   // 7. Low ratings with no follow-up from the team.
   const ratings = await db.query(
-    `SELECT r.*, t.subject, c.name AS company_name, u.name AS client_name FROM ticket_ratings r
+    `SELECT r.*, t.subject, t.ref AS ticket_ref, c.name AS company_name, u.name AS client_name FROM ticket_ratings r
      JOIN tickets t ON t.id = r.ticket_id JOIN companies c ON c.id = t.company_id LEFT JOIN users u ON u.id = r.user_id
      WHERE r.rating <= 2 AND r.updated_at >= ?`,
     [now(new Date(Date.now() - 30 * 864e5))]
@@ -241,7 +241,7 @@ async function computeActions() {
       type: 'rating',
       category: 'tickets',
       severity: 'high',
-      title: `${r.rating}-star rating from ${r.client_name || 'a client'}: #${r.ticket_id} ${r.subject} (${r.company_name})`,
+      title: `${r.rating}-star rating from ${r.client_name || 'a client'}: ${ticketRefOf(r.ticket_id, r.ticket_ref)} ${r.subject} (${r.company_name})`,
       detail: r.comment ? `"${String(r.comment).slice(0, 200)}"` : 'No comment left.',
       suggestion: 'Contact the client to understand what went wrong and put it right.',
       since: r.updated_at,

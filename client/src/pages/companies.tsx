@@ -523,6 +523,10 @@ function CompanyDialog({ company, onClose }: { company: Company | null; onClose:
   const [domain, setDomain] = useState(company?.email_domain ?? '');
   const [notes, setNotes] = useState(company?.notes ?? '');
   const [rc, setRc] = useState(company?.rc_number ?? '');
+  // Ticket IDs: the next number is shown with its zero padding, so "0013" means PAT-0013 comes next.
+  const nextShown = company?.ticket_next != null ? String(company.ticket_next).padStart(Number(company.ticket_pad) || 0, '0') : '';
+  const [prefix, setPrefix] = useState(company?.ticket_prefix ?? '');
+  const [start, setStart] = useState(nextShown);
   // A newly chosen logo file, or 'remove' to clear the current one.
   const [logo, setLogo] = useState<File | 'remove' | null>(null);
   const [preview, setPreview] = useState<string | null>(company?.logo_url ?? null);
@@ -543,7 +547,17 @@ function CompanyDialog({ company, onClose }: { company: Company | null; onClose:
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const body = { name, email_domain: domain, notes, rc_number: rc, site_contacts: siteContacts, is_active: active };
+    const body = {
+      name,
+      email_domain: domain,
+      notes,
+      rc_number: rc,
+      site_contacts: siteContacts,
+      is_active: active,
+      ticket_prefix: prefix.trim(),
+      // Only a changed number restarts the count; otherwise it carries on.
+      ...(start.trim() !== nextShown || (!prefix.trim() && !start.trim()) ? { ticket_start: start.trim() } : {}),
+    };
     try {
       const saved = company
         ? (await api.patch<{ company: Company }>(`/companies/${company.id}`, body)).company
@@ -616,6 +630,30 @@ function CompanyDialog({ company, onClose }: { company: Company | null; onClose:
             <Label htmlFor="company-rc">RC number</Label>
             <Input id="company-rc" placeholder="RC 1234567" maxLength={40} value={rc} onChange={(e) => setRc(e.target.value)} />
             <p className="text-xs text-muted-foreground">CAC registration number (RC for companies, BN for business names).</p>
+          </div>
+          <div className="grid gap-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label htmlFor="company-ticket-prefix">Ticket ID prefix</Label>
+                <Input id="company-ticket-prefix" placeholder="PAT-" maxLength={20} value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="company-ticket-start">{company?.ticket_next != null ? 'Next ticket number' : 'Start counting from'}</Label>
+                <Input
+                  id="company-ticket-start"
+                  inputMode="numeric"
+                  placeholder="0001"
+                  maxLength={9}
+                  value={start}
+                  onChange={(e) => setStart(e.target.value.replace(/\D/g, ''))}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {prefix.trim() || start.trim()
+                ? `New tickets for this company will be numbered ${prefix.trim()}${start.trim() || '1'}, ${prefix.trim()}${String(Number(start.trim() || '1') + 1).padStart(start.trim().length > 1 && start.trim().startsWith('0') ? start.trim().length : 0, '0')} and so on. Leading zeros set the width.`
+                : 'Leave both empty to use the portal\'s plain numbers (#123).'}
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="company-domain">Email domain</Label>

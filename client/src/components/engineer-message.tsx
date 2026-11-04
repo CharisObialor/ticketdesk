@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { useTechnicians } from '@/hooks/use-technicians';
 import { api, errorMessage } from '@/lib/api';
-import { PRIORITY_LABELS, duration, formatDateTime, parseTs } from '@/lib/format';
+import { PRIORITY_LABELS, duration, formatDateTime, parseTs, ticketRef } from '@/lib/format';
 import { international } from '@/lib/phone';
 import { faultCategory, resolutionLimit, targetsFor } from '@/lib/sla';
 import type { Message, Technician, Ticket, Visit } from '@/lib/types';
@@ -32,7 +32,7 @@ function draft(t: Ticket, engineer: Technician | undefined, messages: Message[],
   const lines = [
     `Hello ${engineer ? firstName(engineer.name) : ''},`.replace(' ,', ','),
     '',
-    `New job: Ticket #${t.id} - ${t.subject}`,
+    `New job: Ticket ${ticketRef(t)} - ${t.subject}`,
     `Client: ${t.company_name}`,
     `Fault: ${t.category}${fault?.description ? ` (${fault.description})` : ''}`,
     `Priority: ${PRIORITY_LABELS[t.priority]}`,

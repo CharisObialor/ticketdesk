@@ -30,7 +30,7 @@ import { PriorityBadge, StatusBadge } from '@/components/ticket-badges';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useSession } from '@/hooks/use-session';
 import { api } from '@/lib/api';
-import { PRIORITY_LABELS, ROLE_LABELS, duration, timeAgo } from '@/lib/format';
+import { PRIORITY_LABELS, ROLE_LABELS, duration, timeAgo, ticketRef, ticketRefOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Metrics } from '@/lib/types';
 
@@ -276,7 +276,7 @@ function SatisfactionCard({ metrics: m }: { metrics: Metrics }) {
                   </div>
                   {r.comment && <p className="mt-1 line-clamp-2 text-sm">"{r.comment}"</p>}
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {r.user_name ?? 'Client'}, {r.company_name} · #{r.ticket_id} {r.subject}
+                    {r.user_name ?? 'Client'}, {r.company_name} · {ticketRefOf(r.ticket_id, r.ticket_ref)} {r.subject}
                   </p>
                 </Link>
               ))}
@@ -397,7 +397,7 @@ function RecentCard({ metrics: m }: { metrics: Metrics }) {
           <button key={t.id} onClick={() => navigate(`/tickets/${t.id}`)} className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-muted/50">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">
-                <span className="font-mono text-xs text-muted-foreground">#{t.id}</span> {t.subject}
+                <span className="font-mono text-xs text-muted-foreground">{ticketRef(t)}</span> {t.subject}
               </div>
               <div className="truncate text-xs text-muted-foreground">
                 {t.company_name} · {timeAgo(t.last_activity_at)}

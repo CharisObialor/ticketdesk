@@ -37,7 +37,7 @@ router.get(
     }
     const rows = await db.query(
       `SELECT tr.id, tr.ticket_id, tr.filename, tr.size, tr.message_count, tr.reason, tr.created_at,
-        t.subject, c.name AS company_name, u.name AS created_by_name
+        t.subject, t.ref AS ticket_ref, c.name AS company_name, u.name AS created_by_name
        FROM transcripts tr JOIN tickets t ON t.id = tr.ticket_id JOIN companies c ON c.id = t.company_id
        LEFT JOIN users u ON u.id = tr.created_by ${where} ORDER BY tr.id DESC LIMIT 300`,
       params

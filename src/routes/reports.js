@@ -49,14 +49,14 @@ router.get(
       ),
       db.query('SELECT id, name, email, job_title, phone, is_active, last_login_at FROM users WHERE company_id = ? ORDER BY name', [cid]),
       db.query(
-        `SELECT r.ticket_id, r.rating, r.comment, r.updated_at, u.name AS user_name, t.subject, au.name AS assignee
+        `SELECT r.ticket_id, t.ref AS ticket_ref, r.rating, r.comment, r.updated_at, u.name AS user_name, t.subject, au.name AS assignee
          FROM ticket_ratings r JOIN tickets t ON t.id = r.ticket_id LEFT JOIN users u ON u.id = r.user_id LEFT JOIN users au ON au.id = t.assigned_to
          WHERE t.company_id = ? AND r.updated_at >= ? AND r.updated_at < ? ORDER BY r.updated_at DESC`,
         [cid, since, until]
       ),
       db.query(
         `SELECT v.id, v.ticket_id, v.scheduled_at, v.duration_min, v.location, v.status, v.started_at, v.completed_at, v.signed_by,
-          v.report, tu.name AS technician, t.subject
+          v.report, tu.name AS technician, t.subject, t.ref AS ticket_ref
          FROM site_visits v JOIN tickets t ON t.id = v.ticket_id LEFT JOIN users tu ON tu.id = v.technician_id
          WHERE t.company_id = ? AND v.scheduled_at >= ? AND v.scheduled_at < ? ORDER BY v.scheduled_at DESC`,
         [cid, since, until]

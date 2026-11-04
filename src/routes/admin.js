@@ -71,6 +71,27 @@ function rcNumber(v) {
   return s;
 }
 
+// The company's ticket IDs: a prefix (PAT-) and the number to count from. Leading zeros in the number set the
+// width, so "0001" gives PAT-0001, PAT-0002 and so on. Returns null when neither was sent (nothing to change).
+function ticketNumbering(b, existing = {}) {
+  if (b.ticket_prefix === undefined && b.ticket_start === undefined) return null;
+  const prefix = String(b.ticket_prefix ?? existing.ticket_prefix ?? '').trim().slice(0, 20);
+  if (prefix && !/^[A-Za-z0-9 ._/-]+$/.test(prefix)) throw new HttpError(400, 'The ticket ID prefix can only contain letters, numbers, spaces, dots, hyphens, underscores and slashes');
+  const start = String(b.ticket_start ?? '').trim();
+  if (start && !/^\d{1,9}$/.test(start)) throw new HttpError(400, 'The starting ticket number must be a whole number (for example 1 or 0001)');
+  const keep = existing.ticket_next !== undefined && existing.ticket_next !== null;
+  return {
+    ticket_prefix: prefix || null,
+    ticket_pad: start ? (start.length > 1 && start.startsWith('0') ? start.length : 0) : Number(existing.ticket_pad) || 0,
+    // A new start replaces the next number; otherwise counting carries on (or starts at 1 when a prefix is first set).
+    ticket_next: start ? Number(start) : !prefix && b.ticket_start === '' ? null : keep ? Number(existing.ticket_next) : prefix ? 1 : null,
+  };
+}
+
+async function saveTicketNumbering(companyId, n) {
+  if (n) await db.query('UPDATE companies SET ticket_prefix = ?, ticket_pad = ?, ticket_next = ? WHERE id = ?', [n.ticket_prefix, n.ticket_pad, n.ticket_next, companyId]);
+}
+
 function companyFields(b, existing = {}) {
   const name = clean(b.name ?? existing.name, 190);
   if (!name) throw new HttpError(400, 'Company name is required');
@@ -99,7 +120,9 @@ router.post(
       now(),
     ]);
     const own = req.body.sla !== undefined ? await sla.setCompany(r.insertId, req.body.sla) : null;
-    res.status(201).json({ company: { id: r.insertId, ...f, sla: own } });
+    const numbering = ticketNumbering(req.body);
+    await saveTicketNumbering(r.insertId, numbering);
+    res.status(201).json({ company: { id: r.insertId, ...f, ...(numbering || {}), sla: own } });
   })
 );
 
@@ -110,6 +133,8 @@ router.patch(
     const existing = await db.one('SELECT * FROM companies WHERE id = ?', [Number(req.params.id)]);
     if (!existing) throw new HttpError(404, 'Company not found');
     const f = companyFields(req.body, existing);
+    const numbering = ticketNumbering(req.body, existing);
+    await saveTicketNumbering(existing.id, numbering);
     await db.query('UPDATE companies SET name = ?, email_domain = ?, notes = ?, rc_number = ?, site_contacts = ?, is_active = ? WHERE id = ?', [
       f.name,
       f.email_domain,
@@ -126,7 +151,7 @@ router.patch(
       recipients = await statement.cleanRecipients(existing.id, req.body.statement_recipients);
       await db.query('UPDATE companies SET statement_recipients = ? WHERE id = ?', [JSON.stringify(recipients), existing.id]);
     }
-    res.json({ company: withLogoUrl({ ...existing, ...f, sla: own, statement_recipients: recipients }) });
+    res.json({ company: withLogoUrl({ ...existing, ...f, ...(numbering || {}), sla: own, statement_recipients: recipients }) });
   })
 );
 

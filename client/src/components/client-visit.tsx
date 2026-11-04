@@ -14,6 +14,7 @@ import { api, errorMessage } from '@/lib/api';
 export interface ClientVisit {
   id: number;
   ticket_id: number;
+  ticket_ref?: string | null;
   status: string;
   location: string | null;
   scheduled_at: string;

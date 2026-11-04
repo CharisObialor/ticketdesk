@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage } from '@/lib/api';
-import { duration, fileSize, signoffMessage } from '@/lib/format';
+import { duration, fileSize, signoffMessage, ticketRef } from '@/lib/format';
 import type { Attachment, Ticket } from '@/lib/types';
 import { apiHref } from '@/lib/api';
 
@@ -116,7 +116,7 @@ export function WorkUpdateDialog({ ticket: t, open, onOpenChange }: { ticket: Ti
         <form onSubmit={submit} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Work update</DialogTitle>
-            <DialogDescription>Record the work carried out on ticket #{t.id}. The client sees this update and gets an email about it.</DialogDescription>
+            <DialogDescription>Record the work carried out on ticket {ticketRef(t)}. The client sees this update and gets an email about it.</DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-2">

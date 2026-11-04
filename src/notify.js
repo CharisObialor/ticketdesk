@@ -1,4 +1,5 @@
 const config = require('./config');
+const { ticketRef } = require('./util');
 const clientMailbox = require('./client-mailbox');
 
 // "45 minutes", "1 hour 30 minutes", "2 days" (matches the portal's wording).
@@ -28,7 +29,7 @@ const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'there'
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // One subject per ticket (follow-ups prefixed "Re:") so every email about a ticket lands in the same thread.
-const subjectFor = (t, followUp = true) => `${followUp ? 'Re: ' : ''}[Ticket #${t.id}] ${t.subject}`;
+const subjectFor = (t, followUp = true) => `${followUp ? 'Re: ' : ''}[Ticket ${ticketRef(t)}] ${t.subject}`;
 
 const visitTime = (ts) =>
   new Intl.DateTimeFormat('en-GB', {
@@ -44,7 +45,7 @@ const visitTime = (ts) =>
 
 function details(t, { internal = false } = {}) {
   const rows = [
-    ['Ticket', `#${t.id}`],
+    ['Ticket', `${ticketRef(t)}`],
     ['Subject', t.subject],
     ['Status', STATUS_LABELS[t.status] || t.status],
     ['Priority', cap(t.priority)],
@@ -215,11 +216,11 @@ module.exports = {
       (r) => ({
         subject: subjectFor(t, false),
         heading: actorIsStaff ? 'A support ticket has been opened for you' : 'We have received your request',
-        inAppTitle: actorIsStaff ? `Ticket #${t.id} opened for you` : `Ticket #${t.id} received`,
+        inAppTitle: actorIsStaff ? `Ticket ${ticketRef(t)} opened for you` : `Ticket ${ticketRef(t)} received`,
         greeting: `Dear ${firstName(r.name)},`,
         intro: actorIsStaff
-          ? `${actor.name} from our support team has opened ticket #${t.id} on your behalf.`
-          : `Thank you for contacting support. Your request has been logged as ticket #${t.id} and our team will respond as soon as possible.`,
+          ? `${actor.name} from our support team has opened ticket ${ticketRef(t)} on your behalf.`
+          : `Thank you for contacting support. Your request has been logged as ticket ${ticketRef(t)} and our team will respond as soon as possible.`,
         paragraphs: ['You will receive an email whenever there is an update. You can reply to these emails or use the portal to add information at any time.'],
         details: details(t),
         quote: excerpt(body),
@@ -233,7 +234,7 @@ module.exports = {
     sendEach(await staff(), actor, (r) => ({
       subject: subjectFor(t, false),
       heading: `New ticket from ${t.company_name}`,
-      inAppTitle: `New ticket #${t.id}: ${t.subject}`,
+      inAppTitle: `New ticket ${ticketRef(t)}: ${t.subject}`,
       greeting: `Dear ${firstName(r.name)},`,
       intro: actorIsStaff
         ? `${actor.name} opened a ticket on behalf of ${t.creator_name || t.company_name}.${attachments}`
@@ -258,7 +259,7 @@ module.exports = {
       const cc = (message.cc || []).filter((e) => e !== to);
       if (requester && requester.id !== actor.id) {
         inapp
-          .create(requester.id, { kind: 'reply', title: `${actor.name} replied on #${t.id}`, body: excerpt(message.body, 200), link: ticketPath(t.id) })
+          .create(requester.id, { kind: 'reply', title: `${actor.name} replied on ${ticketRef(t)}`, body: excerpt(message.body, 200), link: ticketPath(t.id) })
           .catch(() => {});
       }
       // Files go along while they fit within the email attachment limit; any others are named instead.
@@ -272,14 +273,14 @@ module.exports = {
         } else left.push(f.originalname);
       }
       const { html, text } = mailer.render({
-        heading: `Ticket #${t.id}: ${t.subject}`,
+        heading: `Ticket ${ticketRef(t)}: ${t.subject}`,
         greeting: requester && to === requester.email ? `Dear ${firstName(requester.name)},` : 'Good day,',
         paragraphs: [
           ...String(message.body).split(/\n{2,}/),
           ...(left.length ? [`${left.length === 1 ? 'This file was' : 'These files were'} too large to include in this email: ${left.join(', ')}.`] : []),
         ],
         details: [
-          ['Ticket', `#${t.id}`],
+          ['Ticket', `${ticketRef(t)}`],
           ['Company', t.company_name],
           ['Status', STATUS_LABELS[t.status] || t.status],
         ],
@@ -316,9 +317,9 @@ module.exports = {
       sendEach(recipients, actor, (r) => ({
         subject: subjectFor(t),
         heading: 'Work update on your ticket',
-        inAppTitle: `${privacy.nameFor(r, actor, { workUpdate: true })} posted a work update on #${t.id}`,
+        inAppTitle: `${privacy.nameFor(r, actor, { workUpdate: true })} posted a work update on ${ticketRef(t)}`,
         greeting: `Dear ${firstName(r.name)},`,
-        intro: r.role === 'client' ? `Our engineer has posted an update on the work carried out for ticket #${t.id}.` : `${actor.name} has posted an update on the work carried out for ticket #${t.id}.`,
+        intro: r.role === 'client' ? `Our engineer has posted an update on the work carried out for ticket ${ticketRef(t)}.` : `${actor.name} has posted an update on the work carried out for ticket ${ticketRef(t)}.`,
         details: [
           ...details(t, { internal: false }),
           ...(message.time_spent_min ? [['Time spent', visitDuration(message.time_spent_min)]] : []),
@@ -335,9 +336,9 @@ module.exports = {
     sendEach(recipients, actor, (r) => ({
       subject: subjectFor(t),
       heading: actorIsStaff ? 'New reply from our support team' : `New reply from ${t.company_name}`,
-      inAppTitle: `${actor.name} replied on #${t.id}`,
+      inAppTitle: `${actor.name} replied on ${ticketRef(t)}`,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor.name} replied to ticket #${t.id}${attachments}.`,
+      intro: `${actor.name} replied to ticket ${ticketRef(t)}${attachments}.`,
       details: details(t, { internal: !actorIsStaff }),
       quote: excerpt(message.body),
       quoteLabel: 'Message',
@@ -354,9 +355,9 @@ module.exports = {
       sendEach([await activeUser(t.created_by)], actor, (r) => ({
         subject: subjectFor(t),
         heading: copy.heading,
-        inAppTitle: `Ticket #${t.id}: ${STATUS_LABELS[to]}`,
+        inAppTitle: `Ticket ${ticketRef(t)}: ${STATUS_LABELS[to]}`,
         greeting: `Dear ${firstName(r.name)},`,
-        intro: auto && to === 'closed' ? `Ticket #${t.id} was closed automatically because it has been resolved for ${config.autoCloseDays} days with no further replies.` : copy.body,
+        intro: auto && to === 'closed' ? `Ticket ${ticketRef(t)} was closed automatically because it has been resolved for ${config.autoCloseDays} days with no further replies.` : copy.body,
         paragraphs:
           to === 'resolved' && Number(t.signoff_required) > 0
             ? ['Our team will review the resolution before the ticket is closed. If the problem comes back, just reply.']
@@ -375,7 +376,7 @@ module.exports = {
       subject: subjectFor(t),
       heading: reopened ? 'Ticket reopened by client' : `Ticket marked ${STATUS_LABELS[to]} by client`,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor ? actor.name : 'The client'} changed the status of ticket #${t.id} from ${STATUS_LABELS[from]} to ${STATUS_LABELS[to]}.`,
+      intro: `${actor ? actor.name : 'The client'} changed the status of ticket ${ticketRef(t)} from ${STATUS_LABELS[from]} to ${STATUS_LABELS[to]}.`,
       paragraphs: reopened ? ['The client indicated the issue is not yet resolved. Please follow up.'] : [],
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
@@ -391,13 +392,13 @@ module.exports = {
       [t.id]
     );
     sendEach(admins, actor, (r) => ({
-      subject: `[Ticket #${t.id}] Sign-off needed: ${t.subject}`,
+      subject: `[Ticket ${ticketRef(t)}] Sign-off needed: ${t.subject}`,
       heading: 'Sign-off needed',
-      inAppTitle: `Sign-off needed for #${t.id}`,
+      inAppTitle: `Sign-off needed for ${ticketRef(t)}`,
       icon: 'check',
       status: 'resolved',
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor ? actor.name : 'Someone'} marked ticket #${t.id} as resolved. It needs sign-off from ${required === 1 ? 'one admin' : `${required} admins`} before it is resolved and the client is told.`,
+      intro: `${actor ? actor.name : 'Someone'} marked ticket ${ticketRef(t)} as resolved. It needs sign-off from ${required === 1 ? 'one admin' : `${required} admins`} before it is resolved and the client is told.`,
       paragraphs: ['Please check the resolution, then approve it or send it back with a reason.'],
       details: details(t, { internal: true }),
       quote: lastReply ? excerpt(lastReply.body) : null,
@@ -411,12 +412,12 @@ module.exports = {
   async signoffRejected(t, actor, reason) {
     const recipients = [await activeUser(t.signoff_requested_by), await activeUser(t.assigned_to)];
     sendEach(recipients, actor, (r) => ({
-      subject: `[Ticket #${t.id}] Sent back: ${t.subject}`,
+      subject: `[Ticket ${ticketRef(t)}] Sent back: ${t.subject}`,
       heading: 'Resolution sent back',
-      inAppTitle: `#${t.id} sent back by ${actor.name}`,
+      inAppTitle: `${ticketRef(t)} sent back by ${actor.name}`,
       icon: 'alert',
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor.name} did not sign off ticket #${t.id}, so it stays open. The client was not told it had been resolved.`,
+      intro: `${actor.name} did not sign off ticket ${ticketRef(t)}, so it stays open. The client was not told it had been resolved.`,
       quote: reason,
       quoteLabel: 'Reason',
       quoteFrom: actor.name,
@@ -429,16 +430,16 @@ module.exports = {
   async signoffCompleted(t, approvers, outcome = 'resolved') {
     const recipients = [await activeUser(t.signoff_requested_by), await activeUser(t.assigned_to)];
     sendEach(recipients, null, (r) => ({
-      subject: `[Ticket #${t.id}] Signed off and ${outcome}: ${t.subject}`,
+      subject: `[Ticket ${ticketRef(t)}] Signed off and ${outcome}: ${t.subject}`,
       heading: `Ticket signed off and ${outcome}`,
-      inAppTitle: `#${t.id} signed off and ${outcome}`,
+      inAppTitle: `${ticketRef(t)} signed off and ${outcome}`,
       icon: 'check',
       status: outcome,
       greeting: `Dear ${firstName(r.name)},`,
       intro:
         outcome === 'resolved'
-          ? `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now resolved and the client has been told.`
-          : `${approvers.join(' and ')} signed off ticket #${t.id}, so it is now closed.`,
+          ? `${approvers.join(' and ')} signed off ticket ${ticketRef(t)}, so it is now resolved and the client has been told.`
+          : `${approvers.join(' and ')} signed off ticket ${ticketRef(t)}, so it is now closed.`,
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'View ticket',
@@ -458,9 +459,9 @@ module.exports = {
     sendEach(recipients, actor, (r) => ({
       subject: subjectFor(t),
       heading: `Ticket escalated to level ${t.escalation_level}`,
-      inAppTitle: `Ticket #${t.id} escalated`,
+      inAppTitle: `Ticket ${ticketRef(t)} escalated`,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `Ticket #${t.id} has been escalated and needs attention.`,
+      intro: `Ticket ${ticketRef(t)} has been escalated and needs attention.`,
       quote: reason,
       quoteLabel: 'Reason',
       details: details(t, { internal: true }),
@@ -473,7 +474,7 @@ module.exports = {
         subject: subjectFor(t),
         heading: 'Your escalation request has been received',
         greeting: `Dear ${firstName(r.name)},`,
-        intro: `Ticket #${t.id} has been escalated to our support management team, who will review it as a priority.`,
+        intro: `Ticket ${ticketRef(t)} has been escalated to our support management team, who will review it as a priority.`,
         details: details(t),
         ctaUrl: ticketUrl(t.id),
         ctaLabel: 'View ticket',
@@ -486,9 +487,9 @@ module.exports = {
     sendEach([await activeUser(t.assigned_to)], actor, (r) => ({
       subject: subjectFor(t),
       heading: 'A ticket has been assigned to you',
-      inAppTitle: `Ticket #${t.id} assigned to you`,
+      inAppTitle: `Ticket ${ticketRef(t)} assigned to you`,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor.name} assigned ticket #${t.id} to you.`,
+      intro: `${actor.name} assigned ticket ${ticketRef(t)} to you.`,
       details: details(t, { internal: true }),
       ctaUrl: ticketUrl(t.id),
       ctaLabel: 'Open ticket',
@@ -500,7 +501,7 @@ module.exports = {
     const recipients = [await activeUser(t.assigned_to), ...(rating <= 2 ? await staff({ adminsOnly: true }) : [])];
     sendEach(recipients, actor, () => ({
       subject: subjectFor(t),
-      heading: `Ticket #${t.id} rated ${rating} out of 5`,
+      heading: `Ticket ${ticketRef(t)} rated ${rating} out of 5`,
       intro: comment ? `${actor.name}: "${excerpt(comment, 200)}"` : `${actor.name} rated the support on this ticket.`,
     }), { ticket: t, ticketId: t.id, kind: 'rating', email: false });
   },
@@ -510,7 +511,7 @@ module.exports = {
     const recipients = [await activeUser(admin.id), ...(rating <= 2 ? await staff({ adminsOnly: true }) : [])];
     sendEach(recipients, actor, (r) => ({
       subject: subjectFor(t),
-      heading: r.id === admin.id ? `You were rated ${rating} out of 5 on ticket #${t.id}` : `${admin.name} was rated ${rating} out of 5 on ticket #${t.id}`,
+      heading: r.id === admin.id ? `You were rated ${rating} out of 5 on ticket ${ticketRef(t)}` : `${admin.name} was rated ${rating} out of 5 on ticket ${ticketRef(t)}`,
       intro: comment ? `${actor.name}: "${excerpt(comment, 200)}"` : `${actor.name} rated how the job was handled.`,
     }), { ticket: t, ticketId: t.id, kind: 'rating', email: false });
   },
@@ -519,7 +520,7 @@ module.exports = {
   async visitChanged(visit, t, actor, change) {
     const when = visitTime(visit.scheduled_at);
     const rows = [
-      ['Ticket', `#${t.id} ${t.subject}`],
+      ['Ticket', `${ticketRef(t)} ${t.subject}`],
       ['Date and time', when],
       ['Expected duration', visitDuration(visit.duration_min)],
       ['Location', visit.location || t.company_name],
@@ -533,7 +534,7 @@ module.exports = {
       heading: change === 'cancelled' ? 'Site visit cancelled' : change === 'rescheduled' ? 'Site visit rescheduled' : 'You have a new site visit',
       inAppTitle: `Site visit ${verb}: ${when}`,
       greeting: `Dear ${firstName(r.name)},`,
-      intro: `${actor.name} ${verb} a site visit for ${t.company_name} (ticket #${t.id}).`,
+      intro: `${actor.name} ${verb} a site visit for ${t.company_name} (ticket ${ticketRef(t)}).`,
       details: rows,
       quote: visit.notes || undefined,
       quoteLabel: 'Notes',
@@ -544,12 +545,12 @@ module.exports = {
     sendEach([await activeUser(t.created_by)], actor, (r) => ({
       subject: subjectFor(t),
       heading: change === 'cancelled' ? 'Your site visit has been cancelled' : change === 'rescheduled' ? 'Your site visit has been rescheduled' : 'A site visit has been scheduled',
-      inAppTitle: `Site visit ${verb} for #${t.id}`,
+      inAppTitle: `Site visit ${verb} for ${ticketRef(t)}`,
       greeting: `Dear ${firstName(r.name)},`,
       intro:
         change === 'cancelled'
-          ? `The site visit for ticket #${t.id} planned for ${when} has been cancelled. Our team will be in touch if a new visit is needed.`
-          : `A technician will visit on ${when} to work on ticket #${t.id}.`,
+          ? `The site visit for ticket ${ticketRef(t)} planned for ${when} has been cancelled. Our team will be in touch if a new visit is needed.`
+          : `A technician will visit on ${when} to work on ticket ${ticketRef(t)}.`,
       details: change === 'cancelled' ? clientRows.slice(0, 2) : clientRows,
       paragraphs: change === 'cancelled' ? [] : ['Please make sure someone is available to give access. Reply to this email if the time does not suit you.'],
       ctaUrl: ticketUrl(t.id),

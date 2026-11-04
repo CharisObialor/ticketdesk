@@ -15,7 +15,7 @@ import { SitePicker, useSites } from '@/components/company-sites';
 import { useSession } from '@/hooks/use-session';
 import { api, errorMessage, qs } from '@/lib/api';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { PRIORITY_LABELS, STATUS_LABELS, duration, timeAgo } from '@/lib/format';
+import { PRIORITY_LABELS, STATUS_LABELS, duration, timeAgo, ticketRef } from '@/lib/format';
 import { categoryOptions, faultCategory, resolutionLimit, targetsFor } from '@/lib/sla';
 import type { Company, Priority, Status, Ticket, User } from '@/lib/types';
 
@@ -127,7 +127,7 @@ export default function NewTicketPage() {
       const { ticket } = await api.post<{ ticket: Ticket }>('/tickets', fd);
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['counts'] });
-      toast.success(`Ticket #${ticket.id} created`, {
+      toast.success(`Ticket ${ticketRef(ticket)} created`, {
         description: isStaff ? undefined : 'We have emailed you a confirmation and will be in touch shortly.',
       });
       navigate(`/tickets/${ticket.id}`);
@@ -362,7 +362,7 @@ export default function NewTicketPage() {
                     {duplicates.map((d) => (
                       <li key={d.id}>
                         <Link to={`/tickets/${d.id}`} target="_blank" className="font-medium text-foreground underline underline-offset-4">
-                          #{d.id} {d.subject}
+                          {ticketRef(d)} {d.subject}
                         </Link>{' '}
                         <span className="text-muted-foreground">
                           ({STATUS_LABELS[d.status]}

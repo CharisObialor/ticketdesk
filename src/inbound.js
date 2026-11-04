@@ -124,8 +124,20 @@ async function processMessage(parsed) {
   if (token && token.userId === user.id) ticket = await svc.getTicket(token.ticketId);
   if (!ticket && !senderVerified(parsed)) return `ignored: sender ${fromAddr} could not be verified (no SPF/DKIM/DMARC pass)`;
   if (!ticket) {
-    const m = /\[Ticket #(\d+)\]/i.exec(parsed.subject || '');
-    const found = m && (await svc.getTicket(Number(m[1])));
+    // "[Ticket #12]" (internal number) or "[Ticket PAT-0001]" (the company's ticket ID).
+    const m = /\[Ticket (#\d+|[^\]\s][^\]]{0,39})\]/i.exec(parsed.subject || '');
+    let found = null;
+    if (m && m[1].startsWith('#')) found = await svc.getTicket(Number(m[1].slice(1)));
+    else if (m) {
+      const byRef = await db.query('SELECT id FROM tickets WHERE ref = ? ORDER BY id DESC', [m[1].trim()]);
+      for (const row of byRef) {
+        const t = await svc.getTicket(row.id);
+        if (t && canAccessTicket(user, t)) {
+          found = t;
+          break;
+        }
+      }
+    }
     // Only when the subject also matches, so a reply to an old email cannot land on a newer ticket with that number.
     const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
     if (found && norm(parsed.subject).includes(norm(found.subject).slice(0, 60))) ticket = found;

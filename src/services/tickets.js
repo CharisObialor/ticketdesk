@@ -181,15 +181,31 @@ const getReads = (ticketId) =>
   );
 
 // Creates a ticket with its first message. Used by the portal and by inbound email.
+// The next ID in the company's own series (PAT-0001), or null for companies that use plain #123 numbers.
+// The counter only moves forward if nobody else took the same number meanwhile, and IDs already used are skipped.
+async function allocateRef(companyId) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const c = await db.one('SELECT ticket_prefix, ticket_pad, ticket_next FROM companies WHERE id = ?', [companyId]);
+    if (!c || c.ticket_next === null || c.ticket_next === undefined) return null;
+    const n = Number(c.ticket_next);
+    const taken = await db.query('UPDATE companies SET ticket_next = ? WHERE id = ? AND ticket_next = ?', [n + 1, companyId, n]);
+    if (!taken.affectedRows) continue;
+    const ref = `${c.ticket_prefix || ''}${String(n).padStart(Number(c.ticket_pad) || 0, '0')}`;
+    if (!(await db.one('SELECT id FROM tickets WHERE company_id = ? AND ref = ?', [companyId, ref]))) return ref;
+  }
+  return null;
+}
+
 async function createTicket({ actor, companyId, createdBy, subject, body, category = 'General', priority = 'normal', contacts = {}, siteId = null, files = [] }) {
   const staff = isStaff(actor);
   const ts = now();
   const c = (k) => contacts[k] || null;
+  const ref = await allocateRef(companyId);
   const r = await db.query(
     `INSERT INTO tickets (company_id, created_by, subject, category, priority, status, first_response_at, created_at, updated_at, last_activity_at,
-       om_name, om_phone, fse_name, fse_phone, site_id)
-     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [companyId, createdBy, subject, category, priority, staff ? ts : null, ts, ts, ts, c('om_name'), c('om_phone'), c('fse_name'), c('fse_phone'), siteId]
+       om_name, om_phone, fse_name, fse_phone, site_id, ref)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [companyId, createdBy, subject, category, priority, staff ? ts : null, ts, ts, ts, c('om_name'), c('om_phone'), c('fse_name'), c('fse_phone'), siteId, ref]
   );
   const t = await getTicket(r.insertId);
   await addMessage(t, actor, { body, files });

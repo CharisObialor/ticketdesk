@@ -23,7 +23,7 @@ function clientOnly(req, res, next) {
 
 // Visits as a client may see them: when, where and how far along, never which engineer.
 const CLIENT_VISIT = `SELECT v.id, v.ticket_id, v.scheduled_at, v.duration_min, v.location, v.status, v.started_at, v.completed_at,
-  v.client_confirmed_at, v.client_signed_at, v.client_signed_name, t.subject
+  v.client_confirmed_at, v.client_signed_at, v.client_signed_name, t.subject, t.ref AS ticket_ref
   FROM site_visits v JOIN tickets t ON t.id = v.ticket_id`;
 
 router.get(

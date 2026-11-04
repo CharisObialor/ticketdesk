@@ -10,7 +10,7 @@ import { ResolutionBadge, StatusBadge } from '@/components/ticket-badges';
 import { formatVisitTime } from '@/components/visits';
 import { useSession } from '@/hooks/use-session';
 import { api } from '@/lib/api';
-import { timeAgo } from '@/lib/format';
+import { timeAgo, ticketRef, ticketRefOf } from '@/lib/format';
 import type { Ticket } from '@/lib/types';
 
 interface HomeData {
@@ -85,7 +85,7 @@ export default function ClientHomePage() {
                     <li key={v.id} className="space-y-1.5 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <Link to={`/tickets/${v.ticket_id}`} className="truncate text-sm font-medium hover:underline">
-                          #{v.ticket_id} {v.subject}
+                          {ticketRefOf(v.ticket_id, v.ticket_ref)} {v.subject}
                         </Link>
                         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                           <CalendarClock className="size-3.5" />
@@ -131,7 +131,7 @@ export default function ClientHomePage() {
                     <li key={t.id}>
                       <Link to={`/tickets/${t.id}`} className="flex items-center justify-between gap-3 p-3 text-sm hover:bg-muted/50">
                         <span className="truncate">
-                          #{t.id} {t.subject}
+                          {ticketRef(t)} {t.subject}
                         </span>
                         <span className="shrink-0 text-xs text-primary">Rate</span>
                       </Link>
@@ -172,7 +172,7 @@ function TicketList({ tickets }: { tickets: Ticket[] }) {
         <li key={t.id}>
           <Link to={`/tickets/${t.id}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3 hover:bg-muted/50">
             <span className="min-w-0 flex-1 truncate text-sm font-medium">
-              #{t.id} {t.subject}
+              {ticketRef(t)} {t.subject}
             </span>
             {t.site_code && <span className="text-xs text-muted-foreground">{t.site_code}</span>}
             <StatusBadge status={t.status} />
