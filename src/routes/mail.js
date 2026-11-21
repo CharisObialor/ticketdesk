@@ -313,12 +313,12 @@ router.get(
     const row = (label, value) => (value ? `<tr><th>${label}</th><td>${escapeHtml(value)}</td></tr>` : '');
     const when = new Date(m.receivedDateTime || m.sentDateTime || Date.now()).toLocaleString('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: config.timezone });
     res.set('Cache-Control', 'private, no-store');
-    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(m.subject || 'Email')}</title>
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(m.subject || 'Email')}</title>
 <style>body{font:14px/1.5 'Segoe UI',Roboto,Arial,sans-serif;color:#111827;max-width:800px;margin:24px auto;padding:0 16px}h1{font-size:20px;margin:0 0 12px}
 table.meta{border-collapse:collapse;margin-bottom:16px;font-size:13px}table.meta th{text-align:left;color:#6b7280;font-weight:500;padding:2px 12px 2px 0;vertical-align:top}
-hr{border:0;border-top:1px solid #e5e7eb;margin:16px 0}img{max-width:100%;height:auto}@media print{body{margin:0}}</style></head><body>
+hr{border:0;border-top:1px solid #e5e7eb;margin:16px 0}img{max-width:100%;height:auto}.mail{overflow-x:auto;overflow-wrap:anywhere}@media print{body{margin:0}.mail{overflow:visible}}</style></head><body>
 <h1>${escapeHtml(m.subject || '(no subject)')}</h1><table class="meta">${row('From', who(m.from))}${row('Sent', when)}${row('To', list(m.toRecipients))}${row('Cc', list(m.ccRecipients))}${row('Attachments', (m.attachments || []).map((x) => x.name).join(', '))}</table><hr>
-${body}<script src="/print.js"></script></body></html>`);
+<div class="mail">${body}</div><script src="/print.js"></script></body></html>`);
   })
 );
 

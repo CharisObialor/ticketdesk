@@ -697,20 +697,70 @@ function MailBody({ body: original, plain = false }: { body: MailMessage['body']
       parsed.querySelectorAll('style, title').forEach((el) => el.remove());
       body = { ...body, contentType: 'text', content: (parsed.body.innerText || parsed.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim() };
     }
+    // The email sits in one wrapper (#m) so the frame can be sized to it and wide layouts scaled to fit.
     const base =
-      '<base target="_blank"><style>body{font:14px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;margin:16px;word-wrap:break-word}img{max-width:100%;height:auto}pre{white-space:pre-wrap}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d1d5db;padding-left:1ex;color:#4b5563}</style>';
+      '<base target="_blank"><style>html,body{margin:0;padding:0;overflow:hidden}body{font:14px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;word-wrap:break-word;overflow-wrap:anywhere}#m{padding:16px;box-sizing:border-box;transform-origin:0 0}img{max-width:100%;height:auto}pre{white-space:pre-wrap;margin:0}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d1d5db;padding-left:1ex;color:#4b5563}</style>';
+    const wrap = (inner: string) => `<!doctype html><html><head><meta charset="utf-8">${base}</head><body><div id="m">${inner}</div></body></html>`;
     if (body.contentType === 'text') {
       const esc = body.content.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
-      return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body><pre>${esc}</pre></body></html>`;
+      return wrap(`<pre>${esc}</pre>`);
     }
-    return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${body.content}</body></html>`;
+    return wrap(body.content);
   }, [original, plain]);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(240);
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
+
+  // The frame grows to the whole email, so the reading pane is the only thing that scrolls (a frame scrolling inside
+  // a scrolling page is unusable on phones). An email laid out wider than the pane (newsletters are often 600px or
+  // more) is shrunk to fit, the way Gmail and Outlook show it on a phone, so all of it is visible without sideways
+  // scrolling. Pictures that load later, and turning the phone, size it again.
+  const onLoad = () => {
+    stop.current?.();
+    const el = frame.current;
+    const d = el?.contentDocument;
+    const root = d?.getElementById('m');
+    if (!el || !d || !root) return;
+    let raf = 0;
+    const fit = () => {
+      raf = 0;
+      root.style.transform = '';
+      root.style.width = '';
+      const avail = el.clientWidth;
+      const natural = Math.max(root.scrollWidth, root.offsetWidth);
+      let scale = 1;
+      if (avail > 0 && natural > avail + 1) {
+        scale = avail / natural;
+        root.style.width = `${natural}px`;
+        root.style.transform = `scale(${scale})`;
+      }
+      setHeight(Math.max(80, Math.ceil(root.scrollHeight * scale)));
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(fit);
+    };
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    ro.observe(root);
+    d.querySelectorAll('img').forEach((img) => img.addEventListener('load', schedule));
+    fit();
+    stop.current = () => {
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  };
   return (
     <iframe
+      ref={frame}
       title="Email content"
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      // No scripts ever run in the email. allow-same-origin only lets the portal measure it to size the frame.
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      scrolling="no"
       srcDoc={doc}
-      className="h-full w-full flex-1 rounded-md border bg-white"
+      onLoad={onLoad}
+      style={{ height }}
+      className="block w-full shrink-0 rounded-md border bg-white"
     />
   );
 }
@@ -913,9 +963,7 @@ function Reader({
         {folder === 'junkemail' && (
           <p className="text-xs text-muted-foreground">This is in Junk, so it is shown as plain text, without its formatting, pictures or buttons.</p>
         )}
-        <div className="flex min-h-[360px] flex-1 flex-col">
-          <MailBody body={m.body} plain={folder === 'junkemail'} />
-        </div>
+        <MailBody body={m.body} plain={folder === 'junkemail'} />
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => onCompose({ mode: 'reply', ref: m })}>
             <Reply />
