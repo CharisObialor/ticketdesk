@@ -47,6 +47,8 @@ router.use(csrfCheck);
 router.use(require('../privacy').clientResponses);
 router.use(apiLimiter);
 router.use('/auth', require('./auth'));
+// Shared ticket transcripts: public pages behind a random link.
+router.use('/share', require('./share'));
 router.use(adminOnlyPaths(/^\/(actions|tickets\/\d+\/ai)(\/|$)/, require('./actions')));
 router.use('/tickets', require('./tickets'));
 router.use('/metrics', require('./metrics'));

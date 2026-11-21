@@ -406,6 +406,22 @@ CREATE TABLE IF NOT EXISTS technicians (
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS transcript_shares (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ticket_id INT UNSIGNED NOT NULL,
+  token CHAR(43) NOT NULL,
+  filename VARCHAR(150) NOT NULL,
+  size INT UNSIGNED NOT NULL,
+  sent_to TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at DATETIME NOT NULL,
+  revoked_at DATETIME NULL,
+  views INT UNSIGNED NOT NULL DEFAULT 0,
+  last_viewed_at DATETIME NULL,
+  UNIQUE KEY uq_ts_token (token),
+  KEY idx_ts_ticket (ticket_id),
+  CONSTRAINT fk_ts_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
 const sqlite = `
@@ -581,6 +597,12 @@ CREATE TABLE IF NOT EXISTS technicians (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT, area TEXT, notes TEXT,
   is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS transcript_shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, size INTEGER NOT NULL, sent_to TEXT, created_by INTEGER,
+  created_at TEXT NOT NULL, revoked_at TEXT, views INTEGER NOT NULL DEFAULT 0, last_viewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ts_ticket ON transcript_shares(ticket_id);
 `;
 
 // Columns added after the first release. Each is added once, on startup, if missing:

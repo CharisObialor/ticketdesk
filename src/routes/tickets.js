@@ -592,6 +592,136 @@ router.get(
   })
 );
 
+// ---- Full transcript of a finished ticket (logos, people, visits, job updates, emails and photos) ----
+// A download that prints to PDF, and links to a hosted copy that can be emailed (served by routes/share.js).
+const report = require('../report');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { transcriptsDir } = require('../uploads');
+
+const FINISHED = ['resolved', 'closed'];
+const finishedOnly = (t) => {
+  if (!FINISHED.includes(t.status)) throw new HttpError(400, 'The full transcript is available once the ticket is resolved or closed');
+};
+// Admins and agents share links; technicians do not send anything to clients.
+const canShare = (u) => isStaff(u) && u.role !== 'technician';
+const shareUrl = (token) => `${config.apiUrl}/api/share/transcript/${token}`;
+const shareRow = (s) => ({
+  id: s.id,
+  url: s.revoked_at ? null : shareUrl(s.token),
+  size: s.size,
+  sent_to: s.sent_to ? JSON.parse(s.sent_to) : [],
+  created_at: s.created_at,
+  created_by_name: s.created_by_name || null,
+  revoked_at: s.revoked_at,
+  views: Number(s.views) || 0,
+  last_viewed_at: s.last_viewed_at,
+});
+const listShares = async (ticketId) =>
+  (
+    await db.query(
+      `SELECT s.*, u.name AS created_by_name FROM transcript_shares s LEFT JOIN users u ON u.id = s.created_by
+       WHERE s.ticket_id = ? ORDER BY s.id DESC`,
+      [ticketId]
+    )
+  ).map(shareRow);
+
+// Staff get every name (and internal notes unless internal=0); clients get the portal's usual privacy.
+router.get(
+  '/:id/report',
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    finishedOnly(t);
+    const staff = isStaff(req.user);
+    const built = await report.build(t.id, { audience: staff ? 'staff' : 'client', includeInternal: staff && req.query.internal === '1' });
+    res.attachment(`${ticketRef(t).replace(/^#/, 'ticket-')}-transcript.html`.replace(/[^\w.-]+/g, '-'));
+    res.type('text/html').send(built.html);
+  })
+);
+
+router.get(
+  '/:id/report/shares',
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    if (!canShare(req.user)) throw new HttpError(403, 'Admins and agents only');
+    res.json({ shares: await listShares(t.id) });
+  })
+);
+
+// Makes a hosted copy (the client's version, never internal notes) and, if recipients are given, emails them the link.
+router.post(
+  '/:id/report/share',
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    if (!canShare(req.user)) throw new HttpError(403, 'Admins and agents only');
+    finishedOnly(t);
+    const list = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[,;\s]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
+    const to = list(req.body.to);
+    const cc = list(req.body.cc);
+    const bad = [...to, ...cc].filter((x) => !EMAIL_RE.test(x));
+    if (bad.length) throw new HttpError(400, `Not a valid email address: ${bad.join(', ')}`);
+    if (!to.length && cc.length) throw new HttpError(400, 'Add at least one recipient in To');
+    if (to.length + cc.length > 20) throw new HttpError(400, 'Send to 20 people at most');
+    const note = clean(req.body.note, 5000);
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const built = await report.build(t.id, { audience: 'client', hosted: true, printScript: `${config.apiUrl}/report-print.js` });
+    const filename = `share-${t.id}-${now().replace(/[-: ]/g, '')}-${crypto.randomBytes(4).toString('hex')}.html`;
+    await fs.promises.writeFile(path.join(transcriptsDir, filename), built.html, 'utf8');
+    const sentTo = [...to, ...cc];
+    const r = await db.query(
+      'INSERT INTO transcript_shares (ticket_id, token, filename, size, sent_to, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [t.id, token, filename, Buffer.byteLength(built.html), sentTo.length ? JSON.stringify(sentTo) : null, req.user.id, now()]
+    );
+    const url = shareUrl(token);
+    const u = req.user;
+
+    if (to.length) {
+      const { html, text } = mailer.render({
+        heading: `Ticket ${ticketRef(t)}: ${t.subject}`,
+        greeting: 'Hello,',
+        intro: `The full transcript of ticket ${ticketRef(t)} is ready. It covers the whole conversation, job updates, site visits and photos, from the day it was raised to its ${t.status === 'closed' ? 'closure' : 'resolution'}.`,
+        paragraphs: [...(note ? [note] : []), 'You can read it online, or print it and save it as a PDF from the page.'],
+        details: [
+          ['Company', t.company_name],
+          ['Status', STATUS_LABELS[t.status]],
+          ['Opened', parseTs(t.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: config.timezone })],
+        ],
+        ctaUrl: url,
+        ctaLabel: 'View transcript',
+        signature: signatureFor(u),
+        signatureAvatar: avatarUrl(u),
+        footer: 'shared',
+      });
+      mailer.send({ to: to.join(', '), cc, subject: `Transcript of ticket ${ticketRef(t)}: ${t.subject}`, html, text, sender: u, replyTo: u.email });
+    }
+    await svc.addMessage(t, u, {
+      body: sentTo.length ? `${u.name} emailed a link to the full transcript to ${sentTo.join(', ')}.` : `${u.name} created a link to the full transcript.`,
+      internal: true,
+      kind: 'system',
+    });
+    const row = await db.one('SELECT s.*, NULL AS created_by_name FROM transcript_shares s WHERE s.id = ?', [r.insertId]);
+    res.json({ share: { ...shareRow(row), created_by_name: u.name }, sentTo });
+  })
+);
+
+// Turns a link off. The hosted file is removed; the record stays so the team can see it was shared.
+router.delete(
+  '/:id/report/shares/:shareId',
+  wrap(async (req, res) => {
+    const t = await loadTicket(req);
+    if (!canShare(req.user)) throw new HttpError(403, 'Admins and agents only');
+    const s = await db.one('SELECT * FROM transcript_shares WHERE id = ? AND ticket_id = ?', [Number(req.params.shareId), t.id]);
+    if (!s) throw new HttpError(404, 'Link not found');
+    if (!s.revoked_at) {
+      await db.query('UPDATE transcript_shares SET revoked_at = ? WHERE id = ?', [now(), s.id]);
+      fs.unlink(path.join(transcriptsDir, path.basename(s.filename)), () => {});
+    }
+    res.json({ shares: await listShares(t.id) });
+  })
+);
+
 // Admins can send a ticket on to anyone (a vendor, a manager, a colleague without an account): its details, the
 // conversation so far and the full transcript attached. Internal notes are never included.
 router.post(

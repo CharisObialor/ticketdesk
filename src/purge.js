@@ -6,6 +6,16 @@ const path = require('path');
 const db = require('./db');
 const realtime = require('./realtime');
 const { uploadsDir, transcriptsDir } = require('./uploads');
+const { refNumber } = require('./util');
+
+// A deleted ticket's company ID (PAT-0002) is free again: the company's counter goes back to it, so the next ticket
+// takes that number. Numbers above it that are still held are skipped when the next ticket is created.
+async function freeRef(t) {
+  if (!t.ref) return;
+  const c = await db.one('SELECT ticket_prefix, ticket_next FROM companies WHERE id = ?', [t.company_id]);
+  const n = c && c.ticket_next !== null && c.ticket_next !== undefined ? refNumber(c.ticket_prefix, t.ref) : null;
+  if (n !== null && n < Number(c.ticket_next)) await db.query('UPDATE companies SET ticket_next = ? WHERE id = ? AND ticket_next > ?', [n, t.company_id, n]);
+}
 
 const unlinkAll = (dir, names) => {
   for (const n of names) if (n) fs.unlink(path.join(dir, path.basename(n)), () => {});
@@ -19,13 +29,17 @@ async function clearTicketActions(ticketId) {
 }
 
 async function deleteTicket(ticketId) {
-  const t = await db.one('SELECT id, company_id, subject FROM tickets WHERE id = ?', [ticketId]);
+  const t = await db.one('SELECT id, company_id, subject, ref FROM tickets WHERE id = ?', [ticketId]);
   if (!t) return null;
   const files = (await db.query('SELECT stored_name FROM attachments WHERE ticket_id = ?', [t.id])).map((r) => r.stored_name);
-  const transcripts = (await db.query('SELECT filename FROM transcripts WHERE ticket_id = ?', [t.id])).map((r) => r.filename);
+  const transcripts = [
+    ...(await db.query('SELECT filename FROM transcripts WHERE ticket_id = ?', [t.id])),
+    ...(await db.query('SELECT filename FROM transcript_shares WHERE ticket_id = ?', [t.id])),
+  ].map((r) => r.filename);
   await db.query('DELETE FROM notifications WHERE link = ? OR link LIKE ? OR link LIKE ?', [`/tickets/${t.id}`, `/tickets/${t.id}?%`, `/tickets/${t.id}#%`]);
   await clearTicketActions(t.id);
   await db.query('DELETE FROM tickets WHERE id = ?', [t.id]);
+  await freeRef(t);
   unlinkAll(uploadsDir, files);
   unlinkAll(transcriptsDir, transcripts);
   realtime.toTicket(t, 'ticket:deleted', { ticketId: t.id });
@@ -82,11 +96,17 @@ const TICKET_ACTIONS = ['sla', 'ttr', 'unassigned', 'escalated', 'waiting', 'sta
 async function clearAllTickets() {
   const tickets = Number((await db.one('SELECT COUNT(*) AS n FROM tickets')).n);
   const files = (await db.query('SELECT stored_name FROM attachments')).map((r) => r.stored_name);
-  const transcripts = (await db.query('SELECT filename FROM transcripts')).map((r) => r.filename);
+  const transcripts = [...(await db.query('SELECT filename FROM transcripts')), ...(await db.query('SELECT filename FROM transcript_shares'))].map((r) => r.filename);
   await db.query("DELETE FROM notifications WHERE link LIKE '/tickets/%' OR link LIKE '/visits/%'");
   await db.query(`DELETE FROM action_states WHERE ${TICKET_ACTIONS.map(() => 'action_key LIKE ?').join(' OR ')}`, TICKET_ACTIONS.map((k) => `${k}:%`));
   // Ticket emails still waiting to go out (held for an admin who is away, or retrying) are about tickets that are gone.
   await db.query("DELETE FROM mail_outbox WHERE status <> 'sent' AND subject LIKE '%[Ticket #%'");
+  // Each company with its own IDs counts again from the lowest number it has given out (usually 1).
+  const companies = await db.query('SELECT id, ticket_prefix, ticket_next FROM companies WHERE ticket_next IS NOT NULL');
+  for (const c of companies) {
+    const nums = (await db.query('SELECT ref FROM tickets WHERE company_id = ? AND ref IS NOT NULL', [c.id])).map((r) => refNumber(c.ticket_prefix, r.ref)).filter((x) => x !== null);
+    if (nums.length) await db.query('UPDATE companies SET ticket_next = ? WHERE id = ?', [Math.min(...nums, Number(c.ticket_next)), c.id]);
+  }
   await db.query('DELETE FROM tickets');
   if (db.dialect() === 'mysql') await db.query('ALTER TABLE tickets AUTO_INCREMENT = 1');
   else await db.query("DELETE FROM sqlite_sequence WHERE name = 'tickets'").catch(() => {});

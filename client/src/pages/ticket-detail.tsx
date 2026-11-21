@@ -6,9 +6,11 @@ import {
   ArrowLeft,
   CheckCheck,
   CircleCheck,
+  Copy,
   Download,
   FileText,
   Info,
+  Link2,
   Loader2,
   Lock,
   Mail,
@@ -285,6 +287,10 @@ function TicketActions({
   // The engineer the ticket is assigned to (or an admin, or anyone on staff while it is unassigned) reports the work.
   const canReportWork = isStaff && t.status !== 'closed' && (isAdmin || !t.assigned_to || t.assigned_to === user?.id);
   const [emailOpen, setEmailOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  // The full transcript (logos, people, visits, job updates and photos) once the work is finished.
+  const finished = t.status === 'resolved' || t.status === 'closed';
+  const canShare = isStaff && user?.role !== 'technician';
   const [deleteOpen, setDeleteOpen] = useState(false);
   const navigate = useNavigate();
   const isOpen = OPEN_STATUSES.includes(t.status);
@@ -336,6 +342,12 @@ function TicketActions({
           Email ticket
         </Button>
       )}
+      {finished && canShare && (
+        <Button variant="outline" onClick={() => setShareOpen(true)}>
+          <Link2 />
+          Share transcript
+        </Button>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline">
@@ -343,7 +355,27 @@ function TicketActions({
             Export
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-64">
+          {finished && (
+            <>
+              <DropdownMenuLabel>Full transcript</DropdownMenuLabel>
+              <DropdownMenuItem asChild>
+                <a href={apiHref(`/api/tickets/${t.id}/report`)}>
+                  <FileText />
+                  Download (print to PDF)
+                </a>
+              </DropdownMenuItem>
+              {isStaff && (
+                <DropdownMenuItem asChild>
+                  <a href={apiHref(`/api/tickets/${t.id}/report?internal=1`)}>
+                    <Lock />
+                    With internal notes
+                  </a>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuLabel>Download conversation</DropdownMenuLabel>
           <DropdownMenuItem asChild>
             <a href={exportUrl('html')}>HTML (print to PDF)</a>
@@ -396,6 +428,7 @@ function TicketActions({
       )}
       <EscalateDialog open={escalateOpen} onOpenChange={setEscalateOpen} isStaff={isStaff} onConfirm={(reason) => onUpdate({ escalate: true, reason })} />
       {emailOpen && <EmailTicketDialog ticket={t} onClose={() => setEmailOpen(false)} />}
+      {shareOpen && <ShareTranscriptDialog ticket={t} onClose={() => setShareOpen(false)} />}
       {canReportWork && <WorkUpdateDialog ticket={t} open={workOpen} onOpenChange={setWorkOpen} />}
       {dispatchOpen && <EngineerMessageDialog ticket={t} messages={messages} visits={visits} open={dispatchOpen} onOpenChange={setDispatchOpen} />}
     </div>
@@ -472,6 +505,144 @@ function EmailTicketDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: ()
             <Button type="submit" disabled={send.isPending}>
               {send.isPending ? <Loader2 className="animate-spin" /> : <Send />}
               Send
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface TranscriptShare {
+  id: number;
+  url: string | null;
+  size: number;
+  sent_to: string[];
+  created_at: string;
+  created_by_name: string | null;
+  revoked_at: string | null;
+  views: number;
+  last_viewed_at: string | null;
+}
+
+// A hosted copy of the full transcript (the client's version, no internal notes) that anyone with the link can open,
+// emailed to the people chosen, or just a link to copy. Earlier links are listed and can be turned off.
+function ShareTranscriptDialog({ ticket: t, onClose }: { ticket: Ticket; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [to, setTo] = useState<string[]>(t.creator_email ? [t.creator_email] : []);
+  const [cc, setCc] = useState<string[]>([]);
+  const [showCc, setShowCc] = useState(false);
+  const [note, setNote] = useState('');
+  const key = ['ticket', t.id, 'transcript-shares'];
+  const shares = useQuery({ queryKey: key, queryFn: () => api.get<{ shares: TranscriptShare[] }>(`/tickets/${t.id}/report/shares`) });
+  const copy = (url: string) =>
+    navigator.clipboard.writeText(url).then(
+      () => toast.success('Link copied'),
+      () => toast.error('Could not copy the link'),
+    );
+  const create = useMutation({
+    mutationFn: (send: boolean) =>
+      api.post<{ share: TranscriptShare; sentTo: string[] }>(`/tickets/${t.id}/report/share`, send ? { to, cc, note } : {}),
+    onSuccess: (r) => {
+      if (r.sentTo.length) toast.success(`Transcript link sent to ${r.sentTo.length} ${r.sentTo.length === 1 ? 'person' : 'people'}`);
+      else if (r.share.url) copy(r.share.url);
+      qc.invalidateQueries({ queryKey: key });
+      qc.invalidateQueries({ queryKey: ['ticket', t.id] });
+      if (r.sentTo.length) onClose();
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  const revoke = useMutation({
+    mutationFn: (id: number) => api.delete<{ shares: TranscriptShare[] }>(`/tickets/${t.id}/report/shares/${id}`),
+    onSuccess: (r) => {
+      qc.setQueryData(key, r);
+      toast.success('Link turned off');
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  const list = shares.data?.shares ?? [];
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!to.length) return toast.error('Add at least one recipient');
+            create.mutate(true);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Share transcript of {ticketRef(t)}</DialogTitle>
+            <DialogDescription>
+              Emails a link to the full transcript on the portal: the conversation, job updates, site visits, photos and both logos. Anyone with the link can
+              read it and save it as a PDF. Internal notes are never included, and engineers appear as the team.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="transcript-to">To</Label>
+              {!showCc && (
+                <Button type="button" variant="ghost" size="xs" onClick={() => setShowCc(true)}>
+                  Add Cc
+                </Button>
+              )}
+            </div>
+            <RecipientInput id="transcript-to" value={to} onChange={setTo} placeholder="name@company.com" />
+          </div>
+          {showCc && (
+            <div className="grid gap-2">
+              <Label htmlFor="transcript-cc">Cc</Label>
+              <RecipientInput id="transcript-cc" value={cc} onChange={setCc} />
+            </div>
+          )}
+          <div className="grid gap-2">
+            <Label htmlFor="transcript-note">Message (optional)</Label>
+            <Textarea id="transcript-note" rows={3} maxLength={5000} value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+          {list.length > 0 && (
+            <div className="grid gap-2">
+              <Label>Links already made</Label>
+              <ul className="grid max-h-48 gap-2 overflow-y-auto">
+                {list.map((s) => (
+                  <li key={s.id} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{s.sent_to.length ? `Sent to ${s.sent_to.join(', ')}` : 'Link only'}</div>
+                      <div className="text-muted-foreground text-xs">
+                        {formatDateTime(s.created_at)}
+                        {s.created_by_name ? ` by ${s.created_by_name}` : ''} · {s.revoked_at ? 'turned off' : `${s.views} ${s.views === 1 ? 'view' : 'views'}`}
+                      </div>
+                    </div>
+                    {s.url && (
+                      <>
+                        <Button type="button" variant="ghost" size="icon" aria-label="Copy link" onClick={() => copy(s.url!)}>
+                          <Copy />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          disabled={revoke.isPending}
+                          onClick={() => revoke.mutate(s.id)}
+                        >
+                          Turn off
+                        </Button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" disabled={create.isPending} onClick={() => create.mutate(false)}>
+              <Link2 />
+              Copy a link only
+            </Button>
+            <Button type="submit" disabled={create.isPending}>
+              {create.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+              Send link
             </Button>
           </DialogFooter>
         </form>
