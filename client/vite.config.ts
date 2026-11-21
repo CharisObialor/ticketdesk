@@ -29,5 +29,19 @@ export default defineConfig(({ mode }) => ({
     outDir: '../public',
     emptyOutDir: true,
     chunkSizeWarningLimit: 900,
+    // The live server speaks HTTP/1.1, so the browser fetches only a few files at a time: dozens of tiny files (one
+    // per icon) queued up and left the screen blank for seconds. Icons and the UI library
+    // each go out as one file instead.
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'icons', test: /[\/]node_modules[\/]lucide-react[\/]/, priority: 30 },
+            { name: 'common', test: /[/]src[/](components|hooks|lib)[/]/, minShareCount: 2, maxModuleSize: 6000, priority: 10 },
+            { name: 'ui', test: /[\/]node_modules[\/](radix-ui|@radix-ui|@floating-ui|cmdk|vaul|sonner|class-variance-authority|tailwind-merge|clsx)[\/]/, priority: 20 },
+          ],
+        },
+      },
+    },
   },
 }));

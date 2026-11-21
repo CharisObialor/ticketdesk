@@ -13,9 +13,16 @@
     <meta name="apple-mobile-web-app-title" content="DateHeight" />
     <title>DateHeight Support Portal</title>
     <meta name="description" content="Client support portal for DateHeight Integrated Nigeria Limited" />
+    <style>
+      /* Shown from the first moment, before the portal's code has downloaded; the portal replaces it. */
+      .boot { min-height: 100svh; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; background: #fff; }
+      .boot-spin { width: 20px; height: 20px; border: 2px solid #d1d5db; border-top-color: #336cb5; border-radius: 50%; animation: boot-spin 0.8s linear infinite; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+      @media (prefers-color-scheme: dark) { .boot { background: #0a0a0a; } .boot-spin { border-color: #3f3f46; border-top-color: #6b9be0; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot" role="status" aria-label="Loading"><img src="/logo-mark.png" alt="" width="48" height="48" /><div class="boot-spin"></div></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

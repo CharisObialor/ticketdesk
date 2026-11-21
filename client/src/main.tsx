@@ -9,6 +9,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { basename, currentPath } from '@/lib/url-key';
 import { EmptyState } from '@/components/common';
+import { FullPageLoader } from '@/components/full-page-loader';
 import { SessionProvider } from '@/hooks/use-session';
 import { ThemeProvider } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api';
@@ -103,7 +104,7 @@ const router = createBrowserRouter([
   {
     lazy: layout((m) => m.AppLayout),
     // Shown for a moment when the portal opens straight onto an on-demand page (such as /dashboard).
-    hydrateFallbackElement: <div className="min-h-svh bg-background" />,
+    hydrateFallbackElement: <FullPageLoader />,
     children: [
       { index: true, lazy: layout((m) => m.HomeRedirect) },
       { path: 'tickets', lazy: page(() => import('@/pages/tickets')) },
