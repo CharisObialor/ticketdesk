@@ -316,7 +316,7 @@ export default function MailPage() {
           </Tooltip>
         </div>
 
-        <div className="grid min-h-0 flex-1 md:grid-cols-[230px_360px_minmax(0,1fr)]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[230px_360px_minmax(0,1fr)]">
           {/* Mailboxes and folders */}
           <nav className="hidden min-h-0 overflow-y-auto border-r bg-muted/20 p-2 md:block" aria-label="Mailboxes">
             {boxes.map((b) => {
@@ -446,7 +446,7 @@ export default function MailPage() {
           </div>
 
           {/* Reading pane */}
-          <div className={cn('min-h-0 flex-col', selected ? 'flex' : 'hidden md:flex')}>
+          <div className={cn('min-h-0 min-w-0 flex-col', selected ? 'flex' : 'hidden md:flex')}>
             {selected ? (
               <Reader
                 key={`${box}:${selected}`}
@@ -697,10 +697,12 @@ function MailBody({ body: original, plain = false }: { body: MailMessage['body']
       parsed.querySelectorAll('style, title').forEach((el) => el.remove());
       body = { ...body, contentType: 'text', content: (parsed.body.innerText || parsed.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim() };
     }
-    // The email sits in one wrapper (#m) so the frame can be sized to it and wide layouts scaled to fit.
+    // The email sits in a wrapper (#m) that can be scaled to fit, inside a box (#o) exactly as wide as the screen. The
+    // box clips what is left of the email's own layout width, so the document is never wider than the frame: iPhone
+    // Safari stretches a frame to its document's width whatever width the frame is given.
     const base =
-      '<base target="_blank"><style>html,body{margin:0;padding:0;overflow:hidden}body{font:14px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;word-wrap:break-word;overflow-wrap:anywhere}#m{padding:16px;box-sizing:border-box;transform-origin:0 0}img{max-width:100%;height:auto}pre{white-space:pre-wrap;margin:0}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d1d5db;padding-left:1ex;color:#4b5563}</style>';
-    const wrap = (inner: string) => `<!doctype html><html><head><meta charset="utf-8">${base}</head><body><div id="m">${inner}</div></body></html>`;
+      '<base target="_blank"><style>html{-webkit-text-size-adjust:100%;text-size-adjust:100%}html,body{margin:0;padding:0;overflow:hidden}body{font:14px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;word-wrap:break-word;overflow-wrap:anywhere}#o{overflow:hidden}#m{padding:16px;box-sizing:border-box;transform-origin:0 0}img{max-width:100%;height:auto}pre{white-space:pre-wrap;margin:0}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d1d5db;padding-left:1ex;color:#4b5563}</style>';
+    const wrap = (inner: string) => `<!doctype html><html><head><meta charset="utf-8">${base}</head><body><div id="o"><div id="m">${inner}</div></div></body></html>`;
     if (body.contentType === 'text') {
       const esc = body.content.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
       return wrap(`<pre>${esc}</pre>`);
@@ -708,6 +710,7 @@ function MailBody({ body: original, plain = false }: { body: MailMessage['body']
     return wrap(body.content);
   }, [original, plain]);
   const frame = useRef<HTMLIFrameElement>(null);
+  const holder = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(240);
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
@@ -719,29 +722,37 @@ function MailBody({ body: original, plain = false }: { body: MailMessage['body']
   const onLoad = () => {
     stop.current?.();
     const el = frame.current;
+    const box = holder.current;
     const d = el?.contentDocument;
+    const outer = d?.getElementById('o');
     const root = d?.getElementById('m');
-    if (!el || !d || !root) return;
+    if (!el || !box || !d || !outer || !root) return;
     let raf = 0;
     const fit = () => {
       raf = 0;
+      // The space comes from the reading pane, not the frame, which iPhone may have stretched (2px for the border).
+      const avail = Math.floor(box.clientWidth) - 2;
+      if (avail <= 0) return;
+      outer.style.width = `${avail}px`;
+      outer.style.height = '';
       root.style.transform = '';
       root.style.width = '';
-      const avail = el.clientWidth;
       const natural = Math.max(root.scrollWidth, root.offsetWidth);
       let scale = 1;
-      if (avail > 0 && natural > avail + 1) {
+      if (natural > avail + 1) {
         scale = avail / natural;
         root.style.width = `${natural}px`;
         root.style.transform = `scale(${scale})`;
       }
-      setHeight(Math.max(80, Math.ceil(root.scrollHeight * scale)));
+      const h = Math.max(80, Math.ceil(root.scrollHeight * scale));
+      outer.style.height = `${h}px`;
+      setHeight(h);
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(fit);
     };
     const ro = new ResizeObserver(schedule);
-    ro.observe(el);
+    ro.observe(box);
     ro.observe(root);
     d.querySelectorAll('img').forEach((img) => img.addEventListener('load', schedule));
     fit();
@@ -750,18 +761,22 @@ function MailBody({ body: original, plain = false }: { body: MailMessage['body']
       if (raf) cancelAnimationFrame(raf);
     };
   };
+  // width 1px + min-width 100% is the usual way to stop iPhone Safari widening a frame. If a phone still shows the
+  // email wider than the screen, the holder scrolls sideways so nothing is out of reach.
   return (
-    <iframe
-      ref={frame}
-      title="Email content"
-      // No scripts ever run in the email. allow-same-origin only lets the portal measure it to size the frame.
-      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-      scrolling="no"
-      srcDoc={doc}
-      onLoad={onLoad}
-      style={{ height }}
-      className="block w-full shrink-0 rounded-md border bg-white"
-    />
+    <div ref={holder} className="w-full min-w-0 shrink-0 overflow-x-auto overscroll-x-contain">
+      <iframe
+        ref={frame}
+        title="Email content"
+        // No scripts ever run in the email. allow-same-origin only lets the portal measure it to size the frame.
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        scrolling="no"
+        srcDoc={doc}
+        onLoad={onLoad}
+        style={{ height, width: 1, minWidth: '100%' }}
+        className="block rounded-md border bg-white"
+      />
+    </div>
   );
 }
 
