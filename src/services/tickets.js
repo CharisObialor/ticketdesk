@@ -6,7 +6,7 @@ const notify = require('../notify');
 const transcript = require('../transcript');
 const { transcriptsDir } = require('../uploads');
 const { isStaff } = require('../auth');
-const { now, STATUS_LABELS } = require('../util');
+const { now, STATUS_LABELS, refNumber } = require('../util');
 
 const TICKET_SELECT = `SELECT t.*, c.name AS company_name, cu.name AS creator_name, cu.email AS creator_email,
   au.name AS assignee_name, s.code AS site_code, s.location AS site_location
@@ -182,16 +182,19 @@ const getReads = (ticketId) =>
 
 // Creates a ticket with its first message. Used by the portal and by inbound email.
 // The next ID in the company's own series (PAT-0001), or null for companies that use plain #123 numbers.
-// The counter only moves forward if nobody else took the same number meanwhile, and IDs already used are skipped.
+// It is the lowest number from the company's counter up that no ticket holds, so numbers freed by deleting a ticket
+// are used again. The counter only moves if nobody else took the same number meanwhile.
 async function allocateRef(companyId) {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const c = await db.one('SELECT ticket_prefix, ticket_pad, ticket_next FROM companies WHERE id = ?', [companyId]);
     if (!c || c.ticket_next === null || c.ticket_next === undefined) return null;
-    const n = Number(c.ticket_next);
-    const taken = await db.query('UPDATE companies SET ticket_next = ? WHERE id = ? AND ticket_next = ?', [n + 1, companyId, n]);
-    if (!taken.affectedRows) continue;
-    const ref = `${c.ticket_prefix || ''}${String(n).padStart(Number(c.ticket_pad) || 0, '0')}`;
-    if (!(await db.one('SELECT id FROM tickets WHERE company_id = ? AND ref = ?', [companyId, ref]))) return ref;
+    const from = Number(c.ticket_next);
+    const rows = await db.query('SELECT ref FROM tickets WHERE company_id = ? AND ref IS NOT NULL', [companyId]);
+    const used = new Set(rows.map((r) => refNumber(c.ticket_prefix, r.ref)).filter((x) => x !== null));
+    let n = from;
+    while (used.has(n)) n++;
+    const taken = await db.query('UPDATE companies SET ticket_next = ? WHERE id = ? AND ticket_next = ?', [n + 1, companyId, from]);
+    if (taken.affectedRows) return `${c.ticket_prefix || ''}${String(n).padStart(Number(c.ticket_pad) || 0, '0')}`;
   }
   return null;
 }

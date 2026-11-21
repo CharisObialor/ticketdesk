@@ -2,6 +2,13 @@
 // A ticket's ID as people see it: the company's own (PAT-0001) when it has one, otherwise #123.
 const ticketRef = (t) => (t && t.ref) || `#${t && (t.id ?? t.ticket_id)}`;
 const ticketRefOf = (id, ref) => ref || `#${id}`;
+// The number in a company ticket ID (PAT-0002 gives 2), or null when the ID is not in that prefix's series.
+function refNumber(prefix, ref) {
+  const p = prefix || '';
+  if (!ref || !String(ref).startsWith(p)) return null;
+  const rest = String(ref).slice(p.length);
+  return /^\d{1,9}$/.test(rest) ? Number(rest) : null;
+}
 
 function now(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
@@ -66,6 +73,7 @@ const STATUS_LABELS = {
 module.exports = {
   ticketRef,
   ticketRefOf,
+  refNumber,
   now,
   parseTs,
   HttpError,
