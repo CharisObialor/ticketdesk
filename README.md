@@ -5,6 +5,8 @@ A support ticketing portal for a contract-services company. Client companies sig
 **Features**
 - **Client portal:** clients raise tickets (subject, category, priority, description, attachments), chat with your team, mark tickets solved, reopen or escalate them, and export the conversation.
 - **Staff workspace:** queues for All open, Assigned to me, Unassigned and Escalated. Staff can assign tickets, change status and priority, write internal notes that clients never see, and create tickets on a client's behalf.
+- **Company ticket IDs:** each company can have its own ticket numbers, such as `PAT-0001`. Set a prefix and a starting number on the company form; leading zeros set the width (`0001` gives `PAT-0001`, `PAT-0002` ...). A new ticket takes the lowest free number, so deleting `PAT-0002` makes the next ticket `PAT-0002`, and once every ticket is deleted, counting starts again from the first number. Companies without a prefix keep plain `#123` numbers, which are never reused.
+- **Mail (admins):** read and send from the support mailbox, your own mailbox and the shared mailboxes you have access to. On phones, emails are shrunk to fit the screen and scroll with the page; pinch to zoom in.
 - **Messages:** one inbox for group chats and ticket conversations, with unread counts. Clients can start a group with colleagues from their company; every group includes at least one admin, and technicians can be added when needed. Admins can view every group.
 - **Actions for admins:** the portal watches tickets, site visits, the team and system health, and lists what needs doing (responses about to miss their SLA, unassigned or waiting tickets, untouched escalations, missing visit reports, low ratings, pending invitations, overloaded staff, failed backups), with one-click fixes, snooze and dismiss. Urgent items are emailed at once, items left waiting are reminded in the bell, and a summary email goes out each weekday morning.
 - **Ticket assistant (admins):** a summary, the suggested next step, client mood, risk flags and a drafted reply for any ticket. The built-in engine is free and runs on the server with no outside service; a self-hosted Ollama model or Claude can be plugged in (see `.env.example`).
@@ -19,6 +21,11 @@ A support ticketing portal for a contract-services company. Client companies sig
 - **Chat export & archive:**
   - Any conversation can be exported as HTML (print to PDF), TXT or JSON.
   - A full transcript, including internal notes, is saved to the **Transcripts archive** automatically when a ticket is resolved or closed. Staff can also save one manually.
+- **Full ticket transcripts (resolved and closed tickets):** one page with your logo and the client's logo, the ticket details, everyone who worked on it with their email addresses, site visits and their reports, the whole conversation with job updates, email senders and copies, photos shown in place, the sign-off and the client's rating.
+  - **Download:** ticket page → **Export → Full transcript**. It opens in any browser; print it and choose Save as PDF. Photos are built into the file, so it works offline.
+  - **Share by link:** admins and agents click **Share transcript** to email a link to the client (or copy it). Anyone with the link can read the transcript without signing in, and save it as a PDF. Each link is a copy taken when it was made, so make a new one if the ticket changes later. The dialog shows how often each link was opened, and **Turn off** stops a link at once. Links never expire on their own.
+  - **Who sees what:** a copy downloaded by staff names everyone, technicians included, and can include internal notes. A client's download and every shared link follow the portal's privacy rule: technicians appear as "DateHeight engineer", and internal notes and visit instructions are left out.
+  - Links use the API's address: `API_URL` when the API runs on its own address (for example `api.yourcompany.com`), otherwise `APP_URL`.
 - **SLA auto-escalation:** a ticket with no staff reply within its priority's time limit is escalated, and admins are emailed. Defaults: urgent 1h, high 4h, normal 24h, low 48h.
 - **Dashboard:**
   - Ticket counts: raised and solved, open, escalated, unassigned.
@@ -150,7 +157,7 @@ cPanel → **Setup Node.js App** → **Create Application**
 ### Backups
 Back up two things:
 - The MySQL database: cPanel → Backup, or phpMyAdmin export.
-- The `storage/` folder, which holds uploaded files and archived transcripts.
+- The `storage/` folder, which holds uploaded files, company logos, archived transcripts and the copies behind shared transcript links.
 
 ---
 
